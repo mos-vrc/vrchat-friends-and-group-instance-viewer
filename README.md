@@ -104,13 +104,6 @@ APIリクエスト間には最低250msの間隔を設け、429応答時は `Retr
 
 詳細は [Privacy Policy](./PRIVACY.md) を参照してください。
 
-## Debug Mode
-
-`config.js` の `DEBUG_MODE` を `true` にすると、VRChat APIへアクセスせず合成データだけでUIを確認できます。
-
-- Public / Group / Privateの3インスタンスを生成します。
-- Invite Meは送信しません。
-- API用User-Agentルールの準備もスキップします。
 
 ## お問い合わせ
 
