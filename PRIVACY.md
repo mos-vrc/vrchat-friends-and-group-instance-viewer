@@ -1,7 +1,7 @@
 # Privacy Policy
 ## VRChat Friends & Group Instance Viewer
 
-最終更新日: 2026年9月29日
+最終更新日: 2026年9月30日
 
 VRChat Friends & Group Instance Viewer（以下「本拡張機能」）は、VRChatのオンラインフレンドおよびFriend / Groupインスタンス情報を取得し、ブラウザ上で見やすく一覧表示するChrome拡張機能です。
 
@@ -63,9 +63,9 @@ VRChat APIへのリクエストでは、Chrome自身の通常のCookie処理に�
 
 VRChat APIへのリクエストには、本拡張機能を識別するためのUser-Agent識別子を付加します。
 
-例:
+形式:
 
-`VRChatFriendsGroupInstanceViewer/1.4.21 (contact @mos_vrc)`
+`VRChatFriendsGroupInstanceViewer/<version> (contact @mos_vrc)`
 
 この識別子には、個々のユーザーを識別する情報は含まれません。
 
@@ -89,4 +89,4 @@ VRChatとの通信にはHTTPSを使用します。
 
 ## 9. お問い合わせ
 
-本拡張機能に関するお問い合わせは、開発者のXアカウント `@mos_vrc` までお願いします。
+本拡張機能に関するお問い合わせは、開発者のXアカウント [@mos_vrc](https://x.com/mos_vrc) までお願いします。
