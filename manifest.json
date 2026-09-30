@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "VRChat Friends & Group Instance Viewer",
+  "version": "1.4.22",
+  "description": "VRChatのフレンドとグループインスタンスを一覧表示します。",
+  "action": {
+    "default_title": "VRChat Friends & Group Instance Viewer",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png",
+      "48": "icon-48.png"
+    }
+  },
+  "host_permissions": [
+    "https://vrchat.com/*"
+  ],
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://vrchat.com https://api.vrchat.cloud https://files.vrchat.cloud; connect-src https://vrchat.com; font-src 'self'; object-src 'none'; base-uri 'none'"
+  }
+}
