@@ -1,0 +1,57 @@
+name: Publish v1.4.22 source
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  publish-source:
+    if: github.event.head_commit.message != 'Publish v1.4.22 source'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download and verify release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP=/tmp/vrchat_friends_and_group_instance_viewer_v1.4.22.zip
+          SRC=/tmp/vrc-v1.4.22
+          curl -fL "https://github.com/mos-vrc/vrchat-friends-and-group-instance-viewer/releases/download/v1.4.22/vrchat_friends_and_group_instance_viewer_v1.4.22.zip" -o "$ZIP"
+          echo "396d58b6e3e9fd8fec82583ef9cf194a38c2d4dd04dbbcb02915772b03b49e66  $ZIP" | sha256sum -c -
+          rm -rf "$SRC"
+          mkdir -p "$SRC"
+          unzip -q "$ZIP" -d "$SRC"
+          test "$(jq -r '.version' "$SRC/manifest.json")" = "1.4.22"
+          test "$(jq -r '.manifest_version' "$SRC/manifest.json")" = "3"
+          ! jq -e '.permissions[]? | select(. == "cookies")' "$SRC/manifest.json" >/dev/null
+          test "$(jq -r '.host_permissions[]' "$SRC/manifest.json")" = "https://vrchat.com/*"
+
+      - name: Publish exact extension source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=/tmp/vrc-v1.4.22
+          for file in             manifest.json             background.js             config.js             session.js             storage.js             api.js             domain.js             hydration.js             app.js             index.html             index.css             icon-16.png             icon-32.png             icon-48.png             icon-128.png
+          do
+            cp "$SRC/$file" "$file"
+          done
+          printf '%s  %s\n'             '396d58b6e3e9fd8fec82583ef9cf194a38c2d4dd04dbbcb02915772b03b49e66'             'vrchat_friends_and_group_instance_viewer_v1.4.22.zip'             > SHA256SUMS.txt
+
+          # One-shot workflow: remove itself after publishing the source.
+          rm -f .github/workflows/publish-v1.4.22-source.yml
+
+      - name: Commit source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Publish v1.4.22 source"
+          git push
