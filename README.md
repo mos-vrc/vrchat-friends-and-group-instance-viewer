@@ -2,7 +2,7 @@
 
 VRChatのオンラインフレンドと Friend / Group インスタンスを、Chrome上で見やすく一覧表示する Manifest V3 拡張機能です。
 
-**Current version: v1.4.22**
+**Current version: v1.4.29**
 
 - Chrome Web Store: https://chromewebstore.google.com/detail/vrchat-friends-group-inst/pncejiodjgmlklhgkpclcplgacbohbla
 - Releases: https://github.com/mos-vrc/vrchat-friends-and-group-instance-viewer/releases
@@ -13,13 +13,13 @@ VRChatのオンラインフレンドと Friend / Group インスタンスを、C
 
 ## ソースコードについて
 
-v1.4.22 の拡張機能本体ソースをこのリポジトリで公開しています。Chrome Web Store / GitHub Release で配布している v1.4.22 の内容を確認できるよう、`manifest.json`、JavaScript、HTML、CSS、アイコンを公開しています。
+v1.4.29 の拡張機能本体ソースを公開用として管理しています。`manifest.json`、JavaScript、HTML、CSS、アイコンを確認できる構成です。
 
 各ファイルの SHA-256 は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。
 
-GitHub Release に添付した配布ZIPの SHA-256:
+直近の GitHub Release（v1.4.28）に添付した配布ZIPの SHA-256:
 
-`396d58b6e3e9fd8fec82583ef9cf194a38c2d4dd04dbbcb02915772b03b49e66`
+`26b87d085ecbf8eec29f5c48434095bfb5474f324ecf5336d0acec8316e27b2d`
 
 ## 主な機能
 
@@ -27,15 +27,28 @@ GitHub Release に添付した配布ZIPの SHA-256:
 - `Favorite` / Favorite List 1〜3 / `Join Friends` によるフレンド絞り込み
 - `Favorite List順` / `名前順` によるフレンド並べ替え
 - `すべて` / `Favorite+` / `Favorite` / `Group` タブ
-- `フレンドが多い順` / `人数が多い順` によるインスタンス並べ替え
-- Public / Friends / Friends+ / Invite / Invite+ / Group / Group+ / Group Public / Private 等の状態表示
+- `フレンドが多い順` / `参加人数が多い順` によるインスタンス並べ替え
+- Public / Friends / Friends+ / Invite / Invite+ / Group / Group+ / Group Public / Private 等のインスタンス公開範囲表示
 - `Invite Me`
-- ワールド名からVRChat公式 Launch ページを開く機能
+- ワールド名からVRChat公式Launchページを開く機能
 - ユーザーアイコンからVRChat公式プロフィールを開く機能
 - フレンド一覧の折り畳み
 - インスタンスサイズ `小 / 中 / 大`
+- インスタンス表示 `シンプル / ノーマル`
 - テーマ `ライト / アッシュ / ダークブルー / ダーク`
 - 自動更新 `なし / 10分 / 30分`
+
+
+### インスタンス表示
+
+オプションの「インスタンス表示」は `ノーマル` が初期値です。
+
+- `ノーマル`：従来どおり、ワールド名・インスタンス公開範囲/リージョン・人数・フレンド数・Invite Me・参加ユーザーを表示します。サムネイル右上は `フレンド数 / 参加人数 / 最大人数` で表示します。
+- `シンプル`：1段時はカードの高さを参加ユーザーのアバター高さまで圧縮します。参加ユーザーが増えるとカード自体は2段・3段…と必要な高さまで伸びますが、サムネイルはノーマル表示の高さを上限として上部固定で表示し、それ以上は拡大しません。
+- `シンプル` のサムネイル上部にはインスタンス公開範囲、`Invite Me`、`フレンド数 / 参加人数 / 最大人数` を表示します。
+- `シンプル` では通常インスタンスとPrivateの両方で、ユーザー名をアバター下部の半透明オーバーレイに表示します。Privateもアバター高さを基準にコンパクト化し、人数が多い場合は必要な段数だけ伸びます。
+- `シンプル` でもインスタンスサイズ `小 / 中 / 大` は有効です。
+
 
 ## 必要なもの
 

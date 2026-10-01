@@ -470,10 +470,11 @@ body.sidebar-collapsed .sidebar-toggle {
 .tab:hover { background: #1f303e; color: #dce8ef; }
 .tab.active { background: rgba(29,161,242,.16); border-color: #2e86b8; color: #6ec8ff; font-weight: 700; }
 .sort {
-  width: 152px;
-  min-width: 152px;
+  width: 176px;
+  min-width: 176px;
   height: 32px;
-  padding: 0 28px 0 10px;
+  box-sizing: border-box;
+  padding: 0 30px 0 10px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   background: #101820;
@@ -1197,7 +1198,7 @@ body[data-instance-size="small"] .favorite-badge-participant {
 .participant-list { min-width: 0; }
 
 /* =========================================================
-   v1.4.22 Aurora Glass theme
+   v1.4.29 Aurora Glass theme
    Visual-only override: layout and application behavior stay unchanged.
    ========================================================= */
 :root {
@@ -2784,4 +2785,346 @@ body[data-theme="dark"] .invite-me-button.is-success {
   border-color: #47785b;
   background: #1e3428;
   color: #b7dfc6;
+}
+
+/* =========================================================
+   Instance display mode: Simple / Normal
+   ========================================================= */
+
+.instance-display-select {
+  width: 104px;
+  min-width: 104px;
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #101820;
+  color: var(--text);
+}
+
+/* Default is the current/normal layout. */
+.people-count-simple,
+.invite-me-button-simple {
+  display: none;
+}
+
+/* Simple mode: one row is exactly the avatar height.
+   Additional participant rows expand the whole card instead of scrolling. */
+body[data-instance-display="simple"][data-instance-size="small"] {
+  --instance-thumb-height: var(--instance-avatar-size);
+  --instance-simple-thumb-max-height: 148px;
+  --instance-thumb-fade-height: 34px;
+  --instance-card-min-height: var(--instance-avatar-size);
+  --instance-overlay-title-bottom: 4px;
+}
+body[data-instance-display="simple"][data-instance-size="medium"] {
+  --instance-thumb-height: var(--instance-avatar-size);
+  --instance-simple-thumb-max-height: 170px;
+  --instance-thumb-fade-height: 38px;
+  --instance-card-min-height: var(--instance-avatar-size);
+  --instance-overlay-title-bottom: 5px;
+}
+body[data-instance-display="simple"][data-instance-size="large"] {
+  --instance-thumb-height: var(--instance-avatar-size);
+  --instance-simple-thumb-max-height: 197px;
+  --instance-thumb-fade-height: 42px;
+  --instance-card-min-height: var(--instance-avatar-size);
+  --instance-overlay-title-bottom: 6px;
+}
+
+body[data-instance-display="simple"] .card {
+  height: auto;
+  min-height: var(--instance-avatar-size);
+  align-items: stretch;
+}
+body[data-instance-display="simple"] .thumb-wrap {
+  align-self: stretch;
+  height: auto;
+  min-height: var(--instance-avatar-size);
+  max-height: var(--instance-simple-thumb-max-height);
+}
+
+/*
+ * Simple mode card height is driven only by the participant grid.
+ * Keep the world thumbnail out of normal flow so its intrinsic aspect ratio
+ * cannot enlarge the CSS Grid row. The thumbnail grows with compact rows only
+ * up to the normal-mode thumbnail height; beyond that it stays top-aligned.
+ */
+body[data-instance-display="simple"] .thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: cover;
+  object-position: center top;
+}
+body[data-instance-display="simple"] .info-panel {
+  min-height: var(--instance-avatar-size);
+  padding: 0;
+  overflow: visible;
+}
+body[data-instance-display="simple"] .instance-title-line,
+body[data-instance-display="simple"] .summary-row {
+  display: none;
+}
+body[data-instance-display="simple"] .participant-list {
+  flex: 0 0 auto;
+  min-height: var(--instance-avatar-size);
+  overflow: visible;
+  grid-template-columns: repeat(auto-fill, var(--instance-avatar-size));
+  grid-auto-rows: var(--instance-avatar-size);
+  gap: 4px;
+  align-content: start;
+  padding: 0;
+}
+body[data-instance-display="simple"] .participant {
+  position: relative;
+  width: var(--instance-avatar-size);
+  height: var(--instance-avatar-size);
+  min-height: var(--instance-avatar-size);
+  display: block;
+  overflow: hidden;
+}
+body[data-instance-display="simple"] .participant-avatar-wrap {
+  width: var(--instance-avatar-size);
+  height: var(--instance-avatar-size);
+  min-height: var(--instance-avatar-size);
+  flex: none;
+}
+body[data-instance-display="simple"] .participant-name {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: auto;
+  min-height: 19px;
+  padding: 3px 4px 4px;
+  border: 0;
+  background: linear-gradient(to bottom, rgba(8, 10, 14, .36), rgba(8, 10, 14, .78));
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 13px;
+  text-shadow: 0 1px 2px rgba(0,0,0,.95), 0 0 4px rgba(0,0,0,.55);
+  -webkit-backdrop-filter: blur(1.5px);
+  backdrop-filter: blur(1.5px);
+  pointer-events: none;
+}
+body[data-instance-display="simple"][data-instance-size="medium"] .participant-name {
+  min-height: 21px;
+  padding: 4px 5px;
+  font-size: 10px;
+  line-height: 13px;
+}
+body[data-instance-display="simple"][data-instance-size="large"] .participant-name {
+  min-height: 23px;
+  padding: 4px 6px 5px;
+  font-size: 11px;
+  line-height: 14px;
+}
+body[data-instance-display="simple"] .participant-empty {
+  min-height: var(--instance-avatar-size);
+  margin: 0;
+  padding: 0 8px;
+}
+body[data-instance-display="simple"] .people-count-normal {
+  display: none;
+}
+body[data-instance-display="simple"] .people-count-simple {
+  display: inline;
+}
+body[data-instance-display="simple"] .invite-me-button-simple {
+  position: absolute;
+  z-index: 6;
+  top: 7px;
+  left: calc(var(--instance-thumb-width) / 2);
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--instance-badge-height);
+  min-height: var(--instance-badge-height);
+  padding: 0 6px;
+  font-size: var(--instance-badge-font-size);
+  line-height: 1;
+}
+body[data-instance-display="simple"] .invite-me-button-normal {
+  display: none;
+}
+body[data-instance-display="simple"] .badges {
+  max-width: calc(50% - 34px);
+}
+body[data-instance-display="simple"] .badge {
+  max-width: 100%;
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body[data-instance-display="simple"] .people-count {
+  max-width: calc(50% - 34px);
+  padding: 0 6px;
+  white-space: nowrap;
+}
+body[data-instance-display="simple"] .overlay-title {
+  max-width: 88%;
+  padding: 3px 7px;
+  font-size: max(9px, calc(var(--instance-overlay-title-size) - 3px));
+}
+
+/* Keep the overlaid participant name readable on every theme.
+   The image-independent dark translucent strip is intentional. */
+body[data-theme="light"][data-instance-display="simple"] .participant-name,
+body[data-theme="ash"][data-instance-display="simple"] .participant-name,
+body[data-theme="dark-blue"][data-instance-display="simple"] .participant-name,
+body[data-theme="dark"][data-instance-display="simple"] .participant-name {
+  background: linear-gradient(to bottom, rgba(8, 10, 14, .34), rgba(8, 10, 14, .80));
+  color: #ffffff;
+  border: 0;
+  text-shadow: 0 1px 2px rgba(0,0,0,.95), 0 0 4px rgba(0,0,0,.55);
+}
+
+/* Make the new setting follow each theme. */
+body[data-theme="dark-blue"] .instance-display-select {
+  border-color: rgba(142, 180, 224, .22);
+  background: rgba(5, 11, 21, .58);
+  color: #e8eff8;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+}
+body[data-theme="dark-blue"] .instance-display-select:hover {
+  border-color: rgba(102, 205, 229, .34);
+  background: rgba(10, 18, 31, .72);
+}
+body[data-theme="light"] .instance-display-select {
+  background: #ffffff;
+  border-color: #c9ced6;
+  color: #25292f;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.75);
+}
+body[data-theme="light"] .instance-display-select:hover {
+  background: #f7f8fa;
+  border-color: #aeb5bf;
+}
+body[data-theme="ash"] .instance-display-select {
+  background: #383a40;
+  border-color: #5c6068;
+  color: #f2f3f5;
+  box-shadow: none;
+}
+body[data-theme="ash"] .instance-display-select:hover {
+  background: #404249;
+  border-color: #6d717a;
+}
+body[data-theme="dark"] .instance-display-select {
+  background: #111214;
+  border-color: #3f4147;
+  color: #f2f3f5;
+  box-shadow: none;
+}
+body[data-theme="dark"] .instance-display-select:hover {
+  background: #1e1f22;
+  border-color: #55585f;
+}
+.instance-display-select:focus-visible {
+  outline: 2px solid #50c9eb;
+  outline-offset: 2px;
+}
+
+/* =========================================================
+   Simple mode: Private instance compact layout
+   ========================================================= */
+
+/* Match Private to the same avatar-driven compact height as other instances.
+   One row is avatar-height; additional rows expand naturally. */
+body[data-instance-display="simple"] .private-card {
+  height: auto;
+  min-height: var(--instance-avatar-size);
+  align-items: stretch;
+}
+body[data-instance-display="simple"] .private-label {
+  min-height: var(--instance-avatar-size);
+  padding: 0 8px;
+  align-self: stretch;
+}
+body[data-instance-display="simple"] .private-users {
+  min-height: var(--instance-avatar-size);
+  grid-template-columns: repeat(auto-fill, var(--instance-avatar-size));
+  grid-auto-rows: var(--instance-avatar-size);
+  gap: 4px;
+  padding: 0;
+  align-content: start;
+  overflow: visible;
+}
+body[data-instance-display="simple"] .private-user {
+  position: relative;
+  width: var(--instance-avatar-size);
+  height: var(--instance-avatar-size);
+  min-height: var(--instance-avatar-size);
+  display: block;
+  overflow: hidden;
+}
+body[data-instance-display="simple"] .private-avatar-wrap {
+  width: var(--instance-avatar-size);
+  height: var(--instance-avatar-size);
+  min-height: var(--instance-avatar-size);
+  flex: none;
+}
+body[data-instance-display="simple"] .private-user-name {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: auto;
+  min-height: 19px;
+  padding: 3px 4px 4px;
+  border: 0;
+  background: linear-gradient(to bottom, rgba(8, 10, 14, .34), rgba(8, 10, 14, .80));
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0,0,0,.95), 0 0 4px rgba(0,0,0,.55);
+  -webkit-backdrop-filter: blur(1.5px);
+  backdrop-filter: blur(1.5px);
+  pointer-events: none;
+}
+body[data-instance-display="simple"][data-instance-size="medium"] .private-user-name {
+  min-height: 21px;
+  padding: 4px 5px;
+  font-size: 10px;
+  line-height: 13px;
+}
+body[data-instance-display="simple"][data-instance-size="large"] .private-user-name {
+  min-height: 23px;
+  padding: 4px 6px 5px;
+  font-size: 11px;
+  line-height: 14px;
+}
+body[data-instance-display="simple"] .private-empty {
+  min-height: var(--instance-avatar-size);
+  margin: 0;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+}
+
+/* Force a stable readable overlay in every theme, independent of the
+   normal-mode participant-name colors. */
+body[data-theme="light"][data-instance-display="simple"] .private-user-name,
+body[data-theme="ash"][data-instance-display="simple"] .private-user-name,
+body[data-theme="dark-blue"][data-instance-display="simple"] .private-user-name,
+body[data-theme="dark"][data-instance-display="simple"] .private-user-name {
+  background: linear-gradient(to bottom, rgba(8, 10, 14, .34), rgba(8, 10, 14, .80));
+  color: #ffffff;
+  border: 0;
+  text-shadow: 0 1px 2px rgba(0,0,0,.95), 0 0 4px rgba(0,0,0,.55);
 }

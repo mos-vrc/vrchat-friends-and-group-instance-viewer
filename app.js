@@ -50,6 +50,7 @@ const elements = {
   settingsButton: document.getElementById('settingsButton'),
   settingsPanel: document.getElementById('settingsPanel'),
   friendSort: document.getElementById('friendSort'),
+  instanceDisplay: document.getElementById('instanceDisplay'),
   autoRefresh: document.getElementById('autoRefresh'),
 };
 
@@ -67,6 +68,7 @@ const state = {
   tab: TABS.FAVORITE_PLUS,
   sort: SORTS.FRIENDS_DESC,
   instanceSize: 'medium',
+  instanceDisplay: 'normal',
   friendSort: 'favorite_list',
   theme: 'dark-blue',
   autoRefreshMinutes: 0,
@@ -101,6 +103,7 @@ function persistUiPreferences() {
     tab: state.tab,
     sort: state.sort,
     instanceSize: state.instanceSize,
+    instanceDisplay: state.instanceDisplay,
     friendSort: state.friendSort,
     theme: state.theme,
     autoRefreshMinutes: state.autoRefreshMinutes,
@@ -117,6 +120,9 @@ function restoreUiPreferences() {
   state.instanceSize = ['small', 'medium', 'large'].includes(prefs.instanceSize)
     ? prefs.instanceSize
     : 'medium';
+  state.instanceDisplay = ['simple', 'normal'].includes(prefs.instanceDisplay)
+    ? prefs.instanceDisplay
+    : 'normal';
   state.friendSort = ['name', 'favorite_list'].includes(prefs.friendSort)
     ? prefs.friendSort
     : 'favorite_list';
@@ -128,9 +134,11 @@ function restoreUiPreferences() {
     : 0;
   state.sidebarCollapsed = prefs.sidebarCollapsed === true;
   applyInstanceSize();
+  applyInstanceDisplay();
   applyTheme();
   applySidebarCollapsed();
   if (elements.friendSort) elements.friendSort.value = state.friendSort;
+  if (elements.instanceDisplay) elements.instanceDisplay.value = state.instanceDisplay;
   if (elements.autoRefresh) elements.autoRefresh.value = String(state.autoRefreshMinutes);
   if (elements.friendFilter) {
     const requestedFilter = ['all', 'favorite', 'joinable'].includes(prefs.friendFilter)
@@ -167,6 +175,15 @@ function applyInstanceSize() {
   state.instanceSize = size;
   document.body.dataset.instanceSize = size;
   updateInstanceSizeButtons();
+}
+
+function applyInstanceDisplay() {
+  const display = ['simple', 'normal'].includes(state.instanceDisplay)
+    ? state.instanceDisplay
+    : 'normal';
+  state.instanceDisplay = display;
+  document.body.dataset.instanceDisplay = display;
+  if (elements.instanceDisplay) elements.instanceDisplay.value = display;
 }
 
 function updateThemeButtons() {
@@ -258,7 +275,7 @@ function renderFriendFilterOptions() {
   const groupsByName = new Map(state.favoriteGroups.map((group) => [group.name, group]));
   const groupOptions = ['group_0', 'group_1', 'group_2'].map((name, index) => {
     const group = groupsByName.get(name);
-    const label = group?.displayName || `グループ${index + 1}`;
+    const label = group?.displayName || `Favorite List ${index + 1}`;
     return `<option value="favorite-group:${escapeHtml(name)}">${escapeHtml(label)}</option>`;
   }).join('');
 
@@ -519,7 +536,7 @@ function renderParticipantList(entry) {
   );
   if (!participants.length) {
     const empty = state.tab === TABS.FAVORITE_ONLY
-      ? '表示対象のFavoriteユーザーはいません'
+      ? '表示対象のFavoriteフレンドはいません'
       : '表示対象のユーザーはいません';
     return `<div class="participant-empty">${escapeHtml(empty)}</div>`;
   }
@@ -540,7 +557,7 @@ function renderParticipantList(entry) {
       ? `<img class="participant-avatar" src="${escapeHtml(src)}" loading="lazy" alt="${escapeHtml(name)}">`
       : '<div class="participant-avatar participant-avatar-empty"></div>';
     const avatarLink = profileUrl
-      ? `<a class="participant-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChatプロフィールを開く">${avatar}</a>`
+      ? `<a class="participant-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${avatar}</a>`
       : avatar;
     const isOwner = Boolean(ownerId && ownerId === user.id);
     const isFriend = friendMap().has(user.id);
@@ -582,7 +599,7 @@ function renderPrivateInstance(entry) {
             ? `<img class="private-avatar" src="${escapeHtml(src)}" loading="lazy" alt="${escapeHtml(name)}">`
             : `<div class="private-avatar private-avatar-empty" aria-label="${escapeHtml(name)}"></div>`;
           const privateAvatarLink = profileUrl
-            ? `<a class="private-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChatプロフィールを開く">${privateAvatar}</a>`
+            ? `<a class="private-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${privateAvatar}</a>`
             : privateAvatar;
           return `
             <div class="private-user" title="${escapeHtml(name)}">
@@ -593,7 +610,7 @@ function renderPrivateInstance(entry) {
               <div class="private-user-name">${escapeHtml(name)}</div>
             </div>`;
         }).join('')}
-        ${visibleFriends.length === 0 ? `<div class="private-empty">${favoriteMode ? 'Favoriteユーザはいません' : '表示対象のユーザーはいません'}</div>` : ''}
+        ${visibleFriends.length === 0 ? `<div class="private-empty">${favoriteMode ? 'Favoriteフレンドはいません' : '表示対象のユーザーはいません'}</div>` : ''}
       </div>
     </article>`;
 }
@@ -618,10 +635,14 @@ function renderInstanceCard(entry) {
     || (entry.groupId ? 'グループ名取得中…' : '');
   const userCount = effectiveInstanceUserCount(entry, friendMap());
   const capacity = entry.world?.capacity ?? entry.capacity ?? entry.world?.hardCapacity;
+  const allFriends = uniqueUsers(entry.friends);
+  const allFriendCount = allFriends.length;
+  const favoriteFriendCount = allFriends.filter((friend) => state.favorites.has(friend.id)).length;
   const friendCount = state.tab === TABS.FAVORITE_ONLY
-    ? uniqueUsers(entry.friends).filter((friend) => state.favorites.has(friend.id)).length
-    : uniqueUsers(entry.friends).length;
+    ? favoriteFriendCount
+    : allFriendCount;
   const userCountText = Number.isFinite(capacity) ? `${userCount} / ${capacity}` : `${userCount}`;
+  const thumbnailCountText = `${allFriendCount}/${userCount}/${Number.isFinite(capacity) ? capacity : '-'}`;
   const permissionClass = permissionBadgeClass(entry.permission);
   const regionBadge = ''; 
   const hydrated = Boolean(entry.instanceData || entry.world);
@@ -636,14 +657,18 @@ function renderInstanceCard(entry) {
         <div class="badges">
           <span class="badge ${permissionClass}">${escapeHtml(permissionLabel(entry.permission))}</span>${regionBadge}
         </div>
-        <div class="people-count">${escapeHtml(Number.isFinite(capacity) ? `${userCount}/${capacity}` : `${userCount}`)}</div>
+        <div class="people-count" title="フレンド数 / 参加人数 / 最大人数">
+          <span class="people-count-normal">${escapeHtml(thumbnailCountText)}</span>
+          <span class="people-count-simple">${escapeHtml(thumbnailCountText)}</span>
+        </div>
         <div class="overlay-title" title="${escapeHtml(worldName)}">${escapeHtml(worldName)}</div>
       ${worldUrl ? '</a>' : '</div>'}
+      <button class="invite-me-button invite-me-button-simple" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInvite Meを送信" ${entry.debug || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>Invite Me</button>
 
       <div class="info-panel">
         <div class="instance-title-line">
           ${launchUrl
-            ? `<a class="instance-title-name instance-title-name-link" href="${escapeHtml(launchUrl)}" target="_blank" rel="noopener noreferrer" title="VRChatのLaunch画面を開く">${escapeHtml(worldName)}</a>`
+            ? `<a class="instance-title-name instance-title-name-link" href="${escapeHtml(launchUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式Launchページを開く">${escapeHtml(worldName)}</a>`
             : `<span class="instance-title-name" title="${escapeHtml(worldName)}">${escapeHtml(worldName)}</span>`}
           ${entry.groupId ? `<span class="instance-title-separator">/</span><span class="instance-title-group" title="${escapeHtml(groupName)}">${escapeHtml(groupName)}</span>` : ''}
         </div>
@@ -654,7 +679,7 @@ function renderInstanceCard(entry) {
             <path d="M2.8 10h14.4M10 2.5c2.1 2 3.2 4.5 3.2 7.5S12.1 15.5 10 17.5M10 2.5C7.9 4.5 6.8 7 6.8 10s1.1 5.5 3.2 7.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg><span class="summary-value">${escapeHtml(permissionLabel(entry.permission))}${entry.region ? ` / ${escapeHtml(regionLabel(entry.region))}` : ''}</span></div>
           <div class="summary-item">${renderSummaryPeopleIcon('world')}<span class="summary-value">${escapeHtml(userCountText)}</span></div>
-          <div class="summary-item friend-count-summary">${renderSummaryPeopleIcon('friends')}<span class="summary-value">${escapeHtml(String(friendCount))}</span><button class="invite-me-button" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInvite Meを送信" ${entry.debug || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>Invite Me</button></div>
+          <div class="summary-item friend-count-summary">${renderSummaryPeopleIcon('friends')}<span class="summary-value">${escapeHtml(String(friendCount))}</span><button class="invite-me-button invite-me-button-normal" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInvite Meを送信" ${entry.debug || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>Invite Me</button></div>
         </div>
 
         ${renderParticipantList(entry)}
@@ -684,7 +709,7 @@ async function onInviteMeClick(event) {
     await repository.inviteMyselfTo(location);
     button.textContent = 'Invited';
     button.classList.add('is-success');
-    setTransientStatus('Invite Me を送信しました', { delay: 2200 });
+    setTransientStatus('Invite Meを送信しました', { delay: 2200 });
     window.setTimeout(() => {
       if (!button.isConnected) return;
       button.textContent = 'Invite Me';
@@ -699,8 +724,8 @@ async function onInviteMeClick(event) {
     const message = error?.status === 401
       ? 'VRChatのログインセッションが無効です。'
       : error?.status === 404
-        ? 'このインスタンスは存在しないか、Invite Me を送信できません。'
-        : `Invite Me の送信に失敗しました${error?.status ? ` (${error.status})` : ''}`;
+        ? 'このインスタンスは存在しないか、Invite Meを送信できません。'
+        : `Invite Meの送信に失敗しました${error?.status ? ` (${error.status})` : ''}`;
     setStatus(message, true);
   }
 }
@@ -842,7 +867,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   renderFriendSidebar();
 
   const data = getVisibleInstances();
-  const appVersion = globalThis.chrome?.runtime?.getManifest?.().version || '1.4.22';
+  const appVersion = globalThis.chrome?.runtime?.getManifest?.().version || '1.4.29';
   const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
   if (!data.length) {
     elements.list.innerHTML = `<div class="empty">表示できるインスタンスはありません。</div>${credit}`;
@@ -1074,7 +1099,7 @@ function createDebugData() {
   });
   const favoriteGroups = ['group_0', 'group_1', 'group_2'].map((name, index) => ({
     name,
-    displayName: `グループ${index + 1}`,
+    displayName: `Favorite List ${index + 1}`,
     memberIds: favoriteGroupMembers[index],
   }));
   return { friends, favorites, favoriteGroups, instances };
@@ -1111,7 +1136,7 @@ async function load() {
   state.lastLoadedAt = 0;
   repository.usedStaleFallback = false;
   elements.login?.classList.add('hidden');
-  setStatus('ログイン情報を確認中…');
+  setStatus('VRChatログインセッションを確認中…');
 
   try {
     // Authentication must complete before any account-scoped cache can be used.
@@ -1234,6 +1259,14 @@ document.querySelectorAll('.instance-size-button').forEach((button) => {
     applyInstanceSize();
     persistUiPreferences();
   });
+});
+
+elements.instanceDisplay?.addEventListener('change', () => {
+  state.instanceDisplay = ['simple', 'normal'].includes(elements.instanceDisplay.value)
+    ? elements.instanceDisplay.value
+    : 'normal';
+  applyInstanceDisplay();
+  persistUiPreferences();
 });
 
 document.querySelectorAll('.theme-button').forEach((button) => {

@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>VRChat Friends &amp; Group Instance Viewer v1.4.22</title>
+  <title>VRChat Friends &amp; Group Instance Viewer v1.4.29</title>
   <link rel="stylesheet" href="index.css">
 </head>
-<body data-theme="dark-blue">
+<body data-theme="dark-blue" data-instance-display="normal">
   <div class="app-shell">
     <aside id="friendSidebar" class="friend-sidebar" aria-label="フレンド一覧">
       <div class="sidebar-head">
@@ -21,9 +21,9 @@
         <select id="friendFilter" class="friend-filter" aria-label="フレンドのフィルター">
           <option value="all">すべて</option>
           <option value="favorite" selected>Favorite</option>
-          <option value="favorite-group:group_0">グループ1</option>
-          <option value="favorite-group:group_1">グループ2</option>
-          <option value="favorite-group:group_2">グループ3</option>
+          <option value="favorite-group:group_0">Favorite List 1</option>
+          <option value="favorite-group:group_1">Favorite List 2</option>
+          <option value="favorite-group:group_2">Favorite List 3</option>
           <option value="joinable">Join Friends</option>
         </select>
       </div>
@@ -53,7 +53,7 @@
           <span class="toolbar-divider" aria-hidden="true"></span>
           <select id="sort" class="sort" aria-label="並び順">
             <option value="friends_desc">フレンドが多い順</option>
-            <option value="users_desc">人数が多い順</option>
+            <option value="users_desc">参加人数が多い順</option>
           </select>
           <span id="updatedAt" class="updated-at" title="最終更新">更新: --:--:--</span>
         </div>
@@ -79,6 +79,14 @@
                 <button class="instance-size-button active" type="button" data-instance-size="medium" title="インスタンスサイズを標準に">中</button>
                 <button class="instance-size-button" type="button" data-instance-size="large" title="インスタンスサイズを大きく">大</button>
               </div>
+            </div>
+
+            <div class="settings-row">
+              <label class="settings-label" for="instanceDisplay">インスタンス表示</label>
+              <select id="instanceDisplay" class="instance-display-select" aria-label="インスタンス表示">
+                <option value="simple">シンプル</option>
+                <option value="normal" selected>ノーマル</option>
+              </select>
             </div>
 
             <div class="settings-row">
