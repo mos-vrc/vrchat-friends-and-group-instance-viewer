@@ -17,9 +17,15 @@ v1.4.29 の拡張機能本体ソースを公開用として管理しています
 
 各ファイルの SHA-256 は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。
 
-直近の GitHub Release（v1.4.28）に添付した配布ZIPの SHA-256:
+GitHub Release [v1.4.29](https://github.com/mos-vrc/vrchat-friends-and-group-instance-viewer/releases/tag/v1.4.29)（2026年10月1日公開）に添付した配布ZIP:
 
-`26b87d085ecbf8eec29f5c48434095bfb5474f324ecf5336d0acec8316e27b2d`
+`vrchat_friends_and_group_instance_viewer_v1.4.29_release.zip`
+
+SHA-256（GitHub Release API の `assets[].digest` と、ダウンロードしたZIPから計算した値が一致）:
+
+`20cff2b5e25f20ab0c0ef9f801d8a211779ef7d21f0b04df558a83271f652d4c`
+
+このハッシュは、Release の Assets に添付された上記配布ZIPを対象とします。GitHubが自動生成する `Source code (zip)` / `Source code (tar.gz)` のハッシュではありません。
 
 ## 主な機能
 
