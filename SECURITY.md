@@ -1,6 +1,6 @@
 # Security / 通信仕様
 
-このページは、VRChat Friends & Group Instance Viewer v1.5.2.1 の認証・通信仕様を確認しやすくするための補足資料です。
+このページは、VRChat Friends & Group Instance Viewer v1.5.3 の認証・通信仕様を確認しやすくするための補足資料です。
 
 ## VRChatログインセッション
 
@@ -42,7 +42,7 @@ APIリクエストは `background.js` と `session.js` の両方で `https://vrc
 
 ## 開発者サーバーへの送信
 
-v1.5.2.1には、開発者独自サーバーへフレンド情報、インスタンス情報、認証情報等を送信する処理はありません。
+v1.5.3には、開発者独自サーバーへフレンド情報、インスタンス情報、認証情報等を送信する処理はありません。
 
 Google Analytics、Sentry、広告SDK等の外部分析・テレメトリも使用していません。
 
@@ -64,9 +64,9 @@ VRChat APIクライアントを識別できるよう、通常のChrome User-Agen
 
 ## 検証用ハッシュ
 
-GitHub Release に添付した v1.5.2.1 配布ZIPの SHA-256:
+GitHub Release に添付した v1.5.3 配布ZIPの SHA-256:
 
-`5f302b1c6ec8ace9522eae11a94ff2b36fa9d84f1334c9cd1e79a2acb27707e8`
+`ecd9da4eb05c282bbf921e3b682ecf8fc402f268e44c0a5922431ace2de8bd7d`
 
 リポジトリ上の各拡張機能ファイルのSHA-256は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。
 

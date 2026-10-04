@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VRChat Friends & Group Instance Viewer",
-  "version": "1.5.2.1",
+  "version": "1.5.3",
   "description": "VRChatのオンラインフレンドとFriend / Groupインスタンスを一覧表示し、Favorite管理やフレンドの居場所確認をしやすくします。",
   "action": {
     "default_title": "VRChat Friends & Group Instance Viewer",
@@ -29,5 +29,5 @@
   "content_security_policy": {
     "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://vrchat.com https://api.vrchat.cloud https://files.vrchat.cloud; connect-src https://vrchat.com; font-src 'self'; object-src 'none'; base-uri 'none'"
   },
-  "version_name": "1.5.2.1"
+  "version_name": "1.5.3"
 }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>VRChat Friends &amp; Group Instance Viewer v1.5.2.1</title>
+  <title>VRChat Friends &amp; Group Instance Viewer v1.5.3</title>
   <link rel="stylesheet" href="index.css">
 </head>
 <body data-theme="dark-blue" data-instance-display="normal">
@@ -39,17 +39,18 @@
 
     <button id="sidebarToggle" class="sidebar-toggle" type="button"
             aria-controls="friendSidebar" aria-expanded="true"
-            aria-label="フレンド一覧を隠す" title="フレンド一覧を隠す">‹</button>
+            aria-label="今居るインスタンスも表示" title="今居るインスタンスも表示">»</button>
 
     <main class="main-pane">
       <section class="toolbar">
         <div class="toolbar-left">
           <div class="tabs" role="tablist" aria-label="表示切替">
-            <button class="tab instance-view-tab" data-view="instances" data-filter="all" role="tab" aria-selected="false" title="フレンドがいるすべてのインスタンスを表示">すべて</button>
-            <button class="tab instance-view-tab active" data-view="instances" data-filter="favorite_plus" role="tab" aria-selected="true" title="Favoriteフレンドがいるインスタンスを表示">Favorite+</button>
-            <button class="tab instance-view-tab" data-view="instances" data-filter="favorite_only" role="tab" aria-selected="false" title="Favoriteフレンドのみ表示">Favorite</button>
-            <button class="tab instance-view-tab" data-view="instances" data-filter="groups" role="tab" aria-selected="false" title="Groupインスタンスを表示">Group</button>
-            <span class="tab-mode-divider" aria-hidden="true"></span>
+            <div class="instance-tab-segment" role="presentation">
+              <button class="tab instance-view-tab" data-view="instances" data-filter="all" role="tab" aria-selected="false" title="フレンドがいるすべてのインスタンスを表示">すべて</button>
+              <button class="tab instance-view-tab active" data-view="instances" data-filter="favorite_plus" role="tab" aria-selected="true" title="Favoriteフレンドがいるインスタンスを表示">Favorite+</button>
+              <button class="tab instance-view-tab" data-view="instances" data-filter="favorite_only" role="tab" aria-selected="false" title="Favoriteフレンドのみ表示">Favorite</button>
+              <button class="tab instance-view-tab" data-view="instances" data-filter="groups" role="tab" aria-selected="false" title="Groupインスタンスを表示">Group</button>
+            </div>
             <button class="tab friend-view-tab" data-view="friends" role="tab" aria-selected="false" title="フレンドごとに現在の居場所を表示">フレンド</button>
           </div>
           <span class="toolbar-divider" aria-hidden="true"></span>
