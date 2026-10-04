@@ -1,7 +1,7 @@
 # Privacy Policy
 ## VRChat Friends & Group Instance Viewer
 
-最終更新日: 2026年9月30日
+最終更新日: 2026年10月4日
 
 VRChat Friends & Group Instance Viewer（以下「本拡張機能」）は、VRChatのオンラインフレンドおよびFriend / Groupインスタンス情報を取得し、ブラウザ上で見やすく一覧表示するChrome拡張機能です。
 
@@ -59,7 +59,12 @@ VRChat APIへのリクエストでは、Chrome自身の通常のCookie処理に�
 - データブローカーへの提供
 - 信用力の評価や融資判断
 
-## 5. User-Agent
+
+## 5. Favorite登録・解除
+
+Favorite操作をユーザーが明示的に実行した場合、選択したフレンドIDとFavorite List情報をVRChat公式APIへ送信し、VRChatアカウント上のFriend Favoriteを登録・移動・解除します。この操作のために開発者サーバーへデータを送信することはありません。
+
+## 6. User-Agent
 
 VRChat APIへのリクエストには、本拡張機能を識別するためのUser-Agent識別子を付加します。
 
@@ -69,24 +74,24 @@ VRChat APIへのリクエストには、本拡張機能を識別するためのU
 
 この識別子には、個々のユーザーを識別する情報は含まれません。
 
-## 6. セキュリティ
+## 7. セキュリティ
 
 VRChatとの通信にはHTTPSを使用します。
 
 本拡張機能は、認証Cookie値やパスワード等の認証情報を取得・保存せず、ユーザーのVRChatログインセッションの処理はChrome自身のCookie機構に委ねます。
 
-## 7. Chrome Web Store User Data Policy
+## 8. Chrome Web Store User Data Policy
 
 本拡張機能におけるユーザーデータの取り扱いは、Chrome Web Store Developer Program PoliciesおよびUser Data Policyの要件に従います。
 
 本拡張機能は、ユーザーデータを本拡張機能の単一目的と無関係な用途に使用せず、承認されている場合を除き第三者へ販売または転送しません。
 
-## 8. プライバシーポリシーの変更
+## 9. プライバシーポリシーの変更
 
 本プライバシーポリシーは、本拡張機能の機能やデータの取り扱い方法の変更に応じて更新される場合があります。
 
 変更した場合は、このページの「最終更新日」を更新します。
 
-## 9. お問い合わせ
+## 10. お問い合わせ
 
 本拡張機能に関するお問い合わせは、開発者のXアカウント [@mos_vrc](https://x.com/mos_vrc) までお願いします。

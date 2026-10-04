@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>VRChat Friends &amp; Group Instance Viewer v1.4.29</title>
+  <title>VRChat Friends &amp; Group Instance Viewer v1.5.2.1</title>
   <link rel="stylesheet" href="index.css">
 </head>
 <body data-theme="dark-blue" data-instance-display="normal">
@@ -44,11 +44,13 @@
     <main class="main-pane">
       <section class="toolbar">
         <div class="toolbar-left">
-          <div class="tabs" role="tablist" aria-label="インスタンス表示">
-            <button class="tab" data-filter="all" role="tab" aria-selected="false">すべて</button>
-            <button class="tab active" data-filter="favorite_plus" role="tab" aria-selected="true">Favorite+</button>
-            <button class="tab" data-filter="favorite_only" role="tab" aria-selected="false">Favorite</button>
-            <button class="tab" data-filter="groups" role="tab" aria-selected="false">Group</button>
+          <div class="tabs" role="tablist" aria-label="表示切替">
+            <button class="tab instance-view-tab" data-view="instances" data-filter="all" role="tab" aria-selected="false" title="フレンドがいるすべてのインスタンスを表示">すべて</button>
+            <button class="tab instance-view-tab active" data-view="instances" data-filter="favorite_plus" role="tab" aria-selected="true" title="Favoriteフレンドがいるインスタンスを表示">Favorite+</button>
+            <button class="tab instance-view-tab" data-view="instances" data-filter="favorite_only" role="tab" aria-selected="false" title="Favoriteフレンドのみ表示">Favorite</button>
+            <button class="tab instance-view-tab" data-view="instances" data-filter="groups" role="tab" aria-selected="false" title="Groupインスタンスを表示">Group</button>
+            <span class="tab-mode-divider" aria-hidden="true"></span>
+            <button class="tab friend-view-tab" data-view="friends" role="tab" aria-selected="false" title="フレンドごとに現在の居場所を表示">フレンド</button>
           </div>
           <span class="toolbar-divider" aria-hidden="true"></span>
           <select id="sort" class="sort" aria-label="並び順">
@@ -73,17 +75,17 @@
             </div>
 
             <div class="settings-row">
-              <span class="settings-label">インスタンスサイズ</span>
-              <div class="instance-size-control" role="group" aria-label="インスタンスサイズ">
-                <button class="instance-size-button" type="button" data-instance-size="small" title="インスタンスサイズを小さく">小</button>
-                <button class="instance-size-button active" type="button" data-instance-size="medium" title="インスタンスサイズを標準に">中</button>
-                <button class="instance-size-button" type="button" data-instance-size="large" title="インスタンスサイズを大きく">大</button>
+              <span class="settings-label">表示サイズ</span>
+              <div class="instance-size-control" role="group" aria-label="表示サイズ">
+                <button class="instance-size-button" type="button" data-instance-size="small" title="表示サイズを小さく">小</button>
+                <button class="instance-size-button active" type="button" data-instance-size="medium" title="表示サイズを標準に">中</button>
+                <button class="instance-size-button" type="button" data-instance-size="large" title="表示サイズを大きく">大</button>
               </div>
             </div>
 
             <div class="settings-row">
-              <label class="settings-label" for="instanceDisplay">インスタンス表示</label>
-              <select id="instanceDisplay" class="instance-display-select" aria-label="インスタンス表示">
+              <label class="settings-label" for="instanceDisplay">表示形式</label>
+              <select id="instanceDisplay" class="instance-display-select" aria-label="表示形式">
                 <option value="simple">シンプル</option>
                 <option value="normal" selected>ノーマル</option>
               </select>
@@ -128,10 +130,14 @@
         <button id="loginButton" class="primary">VRChatにログイン</button>
       </section>
 
-      <main id="list" class="instance-list"></main>
+      <section id="list" class="instance-list" aria-label="表示内容"></section>
 
     </main>
   </div>
+
+  <div id="actionToast" class="action-toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div id="friendInstancePreview" class="friend-instance-preview hidden" aria-live="polite"></div>
+  <div id="favoriteMenu" class="favorite-menu hidden" role="menu" aria-label="Favorite"></div>
 
   <script type="module" src="app.js"></script>
 </body>

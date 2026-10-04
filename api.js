@@ -104,9 +104,11 @@ export class VrchatApiClient {
     for (const item of favorites) {
       const favoriteId = item?.favoriteId;
       if (!favoriteId) continue;
-      const current = byFavoriteId.get(favoriteId) || { favoriteId, tags: [] };
+      const current = byFavoriteId.get(favoriteId) || { favoriteId, tags: [], recordIds: [] };
       const tags = Array.isArray(item?.tags) ? item.tags.filter((tag) => typeof tag === 'string') : [];
+      const recordId = typeof item?.id === 'string' && item.id.startsWith('fvrt_') ? item.id : '';
       current.tags = [...new Set([...current.tags, ...tags])];
+      if (recordId) current.recordIds = [...new Set([...current.recordIds, recordId])];
       byFavoriteId.set(favoriteId, current);
     }
     return [...byFavoriteId.values()].slice(0, CONFIG.MAX_FAVORITES);
@@ -114,6 +116,24 @@ export class VrchatApiClient {
 
   fetchFavoriteGroups() {
     return this.fetchJson('/favorite/groups?type=friend&n=100&offset=0');
+  }
+
+  addFriendFavorite(userId, tags) {
+    if (typeof userId !== 'string' || !userId.startsWith('usr_')) throw new Error('Invalid friend user ID.');
+    const normalizedTags = [...new Set((Array.isArray(tags) ? tags : []).filter((tag) => FRIEND_FAVORITE_GROUP_SLOTS.includes(tag)))];
+    if (!normalizedTags.length) throw new Error('A Favorite List is required.');
+    return this.fetchJson('/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'friend', favoriteId: userId, tags: normalizedTags }),
+    });
+  }
+
+  removeFavoriteRecord(favoriteRecordId) {
+    if (typeof favoriteRecordId !== 'string' || !favoriteRecordId.startsWith('fvrt_')) {
+      throw new Error('Invalid Favorite record ID.');
+    }
+    return this.fetchJson(`/favorites/${encodeURIComponent(favoriteRecordId)}`, { method: 'DELETE' });
   }
 
   fetchGroupInstances(userId) {
@@ -153,13 +173,16 @@ function isValidInviteLocation(location) {
 
 const FRIEND_FAVORITE_GROUP_SLOTS = Object.freeze(['group_0', 'group_1', 'group_2']);
 
-function normalizeFavoriteCacheData(items, rawGroups) {
+function normalizeFavoriteCacheData(items, rawGroups, fallbackGroups = []) {
   const favoriteItems = Array.isArray(items)
     ? items
       .filter((item) => item?.favoriteId)
       .map((item) => ({
         favoriteId: item.favoriteId,
         tags: Array.isArray(item.tags) ? item.tags.filter((tag) => typeof tag === 'string') : [],
+        recordIds: Array.isArray(item.recordIds)
+          ? item.recordIds.filter((id) => typeof id === 'string' && id.startsWith('fvrt_'))
+          : (typeof item.id === 'string' && item.id.startsWith('fvrt_') ? [item.id] : []),
       }))
     : [];
 
@@ -168,10 +191,20 @@ function normalizeFavoriteCacheData(items, rawGroups) {
       .filter((group) => group && (group.type === 'friend' || !group.type))
       .map((group) => [group.name, group]),
   );
+  const fallbackGroupsByName = new Map(
+    (Array.isArray(fallbackGroups) ? fallbackGroups : [])
+      .filter((group) => group?.name)
+      .map((group) => [group.name, group]),
+  );
 
   const groups = FRIEND_FAVORITE_GROUP_SLOTS.map((name, index) => {
     const source = groupsByName.get(name) || {};
-    const displayName = source.displayName || source.display_name || `グループ${index + 1}`;
+    const fallback = fallbackGroupsByName.get(name) || {};
+    const displayName = source.displayName
+      || source.display_name
+      || fallback.displayName
+      || fallback.display_name
+      || `Favorite List ${index + 1}`;
     const memberIds = favoriteItems
       .filter((item) => item.tags.includes(name))
       .map((item) => item.favoriteId);
@@ -181,6 +214,11 @@ function normalizeFavoriteCacheData(items, rawGroups) {
   return {
     ids: [...new Set(favoriteItems.map((item) => item.favoriteId))],
     groups,
+    records: favoriteItems.map((item) => ({
+      favoriteId: item.favoriteId,
+      tags: [...new Set(item.tags)],
+      recordIds: [...new Set(item.recordIds)],
+    })),
   };
 }
 
@@ -190,9 +228,10 @@ function favoriteStateFromCachedData(cached) {
       ids: new Set(cached.filter(Boolean)),
       groups: FRIEND_FAVORITE_GROUP_SLOTS.map((name, index) => ({
         name,
-        displayName: `グループ${index + 1}`,
+        displayName: `Favorite List ${index + 1}`,
         memberIds: new Set(),
       })),
+      records: new Map(),
     };
   }
 
@@ -203,11 +242,63 @@ function favoriteStateFromCachedData(cached) {
     const source = groupsByName.get(name) || {};
     return {
       name,
-      displayName: source.displayName || `グループ${index + 1}`,
+      displayName: source.displayName || `Favorite List ${index + 1}`,
       memberIds: new Set(Array.isArray(source.memberIds) ? source.memberIds.filter(Boolean) : []),
     };
   });
-  return { ids: new Set(ids), groups };
+  const rawRecords = Array.isArray(cached?.records) ? cached.records : [];
+  const records = new Map(rawRecords
+    .filter((item) => item?.favoriteId)
+    .map((item) => [item.favoriteId, {
+      favoriteId: item.favoriteId,
+      tags: [...new Set(Array.isArray(item.tags) ? item.tags.filter((tag) => typeof tag === 'string') : [])],
+      recordIds: [...new Set(Array.isArray(item.recordIds) ? item.recordIds.filter((id) => typeof id === 'string' && id.startsWith('fvrt_')) : [])],
+    }]));
+  return { ids: new Set(ids), groups, records };
+}
+
+function favoriteCacheDataFromState(state) {
+  return {
+    ids: [...state.ids],
+    groups: state.groups.map((group) => ({
+      name: group.name,
+      displayName: group.displayName,
+      memberIds: [...group.memberIds],
+    })),
+    records: [...state.records.values()].map((record) => ({
+      favoriteId: record.favoriteId,
+      tags: [...new Set(record.tags || [])],
+      recordIds: [...new Set(record.recordIds || [])],
+    })),
+  };
+}
+
+function applyLocalFavoriteMutation(cached, { userId, groupName = '', remove = false, createdRecord = null } = {}) {
+  const state = favoriteStateFromCachedData(cached);
+  if (!userId) return state;
+
+  state.ids.delete(userId);
+  state.records.delete(userId);
+  state.groups.forEach((group) => group.memberIds.delete(userId));
+
+  if (!remove) {
+    state.ids.add(userId);
+    const recordId = typeof createdRecord?.id === 'string' && createdRecord.id.startsWith('fvrt_')
+      ? createdRecord.id
+      : '';
+    const tags = Array.isArray(createdRecord?.tags)
+      ? createdRecord.tags.filter((tag) => FRIEND_FAVORITE_GROUP_SLOTS.includes(tag))
+      : [groupName];
+    const normalizedTags = tags.length ? [...new Set(tags)] : [groupName];
+    state.records.set(userId, {
+      favoriteId: userId,
+      tags: normalizedTags,
+      recordIds: recordId ? [recordId] : [],
+    });
+    const group = state.groups.find((candidate) => candidate.name === groupName);
+    group?.memberIds.add(userId);
+  }
+  return state;
 }
 
 export class DataRepository {
@@ -345,23 +436,31 @@ export class DataRepository {
     }
   }
 
+  async fetchFavoritesStrict() {
+    this.requireCurrentUser();
+    const items = await this.api.fetchFavorites();
+    let rawGroups = [];
+    let fallbackGroups = [];
+    try {
+      rawGroups = await this.api.fetchFavoriteGroups();
+    } catch (error) {
+      if (error?.status === 401) throw error;
+      const cached = this.favoriteCache.getStaleRecord()?.data;
+      fallbackGroups = Array.isArray(cached?.groups) ? cached.groups : [];
+    }
+    const cachedData = normalizeFavoriteCacheData(items, rawGroups, fallbackGroups);
+    this.favoriteCache.set(cachedData);
+    this.primaryDataUpdatedAt = Math.max(this.primaryDataUpdatedAt, Date.now());
+    return favoriteStateFromCachedData(cachedData);
+  }
+
   async fetchFavorites() {
     this.requireCurrentUser();
     // Fetch both friend favorites and their editable Favorite List metadata.
     // Favorites carry internal list tags (group_0..), while /favorite/groups
     // provides the user-edited display names for those lists.
     try {
-      const [items, rawGroups] = await Promise.all([
-        this.api.fetchFavorites(),
-        this.api.fetchFavoriteGroups().catch((error) => {
-          if (error?.status === 401) throw error;
-          return [];
-        }),
-      ]);
-      const cachedData = normalizeFavoriteCacheData(items, rawGroups);
-      this.favoriteCache.set(cachedData);
-      this.primaryDataUpdatedAt = Math.max(this.primaryDataUpdatedAt, Date.now());
-      return favoriteStateFromCachedData(cachedData);
+      return await this.fetchFavoritesStrict();
     } catch (error) {
       if (error?.status === 401) throw error;
       const record = this.favoriteCache.getStaleRecord();
@@ -372,6 +471,83 @@ export class DataRepository {
       }
       return favoriteStateFromCachedData(cached);
     }
+  }
+
+  async syncFavoritesAfterMutation(localMutation) {
+    try {
+      return { favoriteState: await this.fetchFavoritesStrict(), syncFailed: false, syncError: null };
+    } catch (syncError) {
+      const cached = this.favoriteCache.getStaleRecord()?.data;
+      const favoriteState = applyLocalFavoriteMutation(cached, localMutation);
+      this.favoriteCache.set(favoriteCacheDataFromState(favoriteState));
+      return { favoriteState, syncFailed: true, syncError };
+    }
+  }
+
+  async setFriendFavoriteGroup(userId, groupName, currentRecord = null) {
+    this.requireCurrentUser();
+    if (!FRIEND_FAVORITE_GROUP_SLOTS.includes(groupName)) throw new Error('Invalid Favorite List.');
+    const oldRecordIds = [...new Set(Array.isArray(currentRecord?.recordIds) ? currentRecord.recordIds : [])];
+    const oldTags = [...new Set(Array.isArray(currentRecord?.tags)
+      ? currentRecord.tags.filter((tag) => FRIEND_FAVORITE_GROUP_SLOTS.includes(tag))
+      : [])];
+    if (oldTags.length === 1 && oldTags[0] === groupName && oldRecordIds.length) {
+      return { favoriteState: await this.fetchFavoritesStrict(), syncFailed: false, syncError: null };
+    }
+
+    const deletedIds = [];
+    try {
+      for (const recordId of oldRecordIds) {
+        await this.api.removeFavoriteRecord(recordId);
+        deletedIds.push(recordId);
+      }
+    } catch (error) {
+      // A partial delete is rare, but if it occurs, try to restore the old list.
+      if (deletedIds.length && oldTags.length) {
+        try {
+          await this.api.addFriendFavorite(userId, oldTags);
+          await this.fetchFavoritesStrict().catch(() => null);
+        } catch (rollbackError) {
+          error.favoriteRollbackFailed = true;
+          console.warn('Could not restore previous Favorite after delete failure:', rollbackError);
+        }
+      }
+      throw error;
+    }
+
+    let createdRecord = null;
+    try {
+      createdRecord = await this.api.addFriendFavorite(userId, [groupName]);
+    } catch (error) {
+      // Only an actual write failure triggers rollback. A later refresh failure
+      // must never undo an already-successful Favorite move.
+      if (deletedIds.length && oldTags.length) {
+        try {
+          await this.api.addFriendFavorite(userId, oldTags);
+          await this.fetchFavoritesStrict().catch(() => null);
+        } catch (rollbackError) {
+          error.favoriteRollbackFailed = true;
+          console.warn('Could not restore previous Favorite after move failure:', rollbackError);
+        }
+      }
+      throw error;
+    }
+
+    return this.syncFavoritesAfterMutation({
+      userId,
+      groupName,
+      remove: false,
+      createdRecord,
+    });
+  }
+
+  async removeFriendFavorite(currentRecord) {
+    this.requireCurrentUser();
+    const recordIds = [...new Set(Array.isArray(currentRecord?.recordIds) ? currentRecord.recordIds : [])];
+    if (!recordIds.length) throw new Error('Favorite record ID is unavailable. Refresh and try again.');
+    const userId = currentRecord?.favoriteId || '';
+    for (const recordId of recordIds) await this.api.removeFavoriteRecord(recordId);
+    return this.syncFavoritesAfterMutation({ userId, remove: true });
   }
 
   async inviteMyselfTo(location) {

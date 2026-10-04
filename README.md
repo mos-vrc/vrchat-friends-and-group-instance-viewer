@@ -2,7 +2,7 @@
 
 VRChatのオンラインフレンドと Friend / Group インスタンスを、Chrome上で見やすく一覧表示する Manifest V3 拡張機能です。
 
-**Current version: v1.4.29**
+**Current version: v1.5.2.1**
 
 - Chrome Web Store: https://chromewebstore.google.com/detail/vrchat-friends-group-inst/pncejiodjgmlklhgkpclcplgacbohbla
 - Releases: https://github.com/mos-vrc/vrchat-friends-and-group-instance-viewer/releases
@@ -13,47 +13,64 @@ VRChatのオンラインフレンドと Friend / Group インスタンスを、C
 
 ## ソースコードについて
 
-v1.4.29 の拡張機能本体ソースを公開用として管理しています。`manifest.json`、JavaScript、HTML、CSS、アイコンを確認できる構成です。
+v1.5.2.1 の拡張機能本体ソースを公開用として管理しています。`manifest.json`、JavaScript、HTML、CSS、アイコンを確認できる構成です。
 
 各ファイルの SHA-256 は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。
 
-GitHub Release [v1.4.29](https://github.com/mos-vrc/vrchat-friends-and-group-instance-viewer/releases/tag/v1.4.29)（2026年10月1日公開）に添付した配布ZIP:
+GitHub Release に添付した v1.5.2.1 配布ZIPの SHA-256:
 
-`vrchat_friends_and_group_instance_viewer_v1.4.29_release.zip`
-
-SHA-256（GitHub Release API の `assets[].digest` と、ダウンロードしたZIPから計算した値が一致）:
-
-`20cff2b5e25f20ab0c0ef9f801d8a211779ef7d21f0b04df558a83271f652d4c`
-
-このハッシュは、Release の Assets に添付された上記配布ZIPを対象とします。GitHubが自動生成する `Source code (zip)` / `Source code (tar.gz)` のハッシュではありません。
+`5f302b1c6ec8ace9522eae11a94ff2b36fa9d84f1334c9cd1e79a2acb27707e8`
 
 ## 主な機能
 
 - オンラインフレンドと Friend / Group インスタンスの一覧表示
 - `Favorite` / Favorite List 1〜3 / `Join Friends` によるフレンド絞り込み
 - `Favorite List順` / `名前順` によるフレンド並べ替え
-- `すべて` / `Favorite+` / `Favorite` / `Group` タブ
+- `すべて` / `Favorite+` / `Favorite` / `Group` のインスタンス表示と、`フレンド` の逆引き表示
 - `フレンドが多い順` / `参加人数が多い順` によるインスタンス並べ替え
 - Public / Friends / Friends+ / Invite / Invite+ / Group / Group+ / Group Public / Private 等のインスタンス公開範囲表示
 - `Invite Me`
 - ワールド名からVRChat公式Launchページを開く機能
 - ユーザーアイコンからVRChat公式プロフィールを開く機能
 - フレンド一覧の折り畳み
-- インスタンスサイズ `小 / 中 / 大`
-- インスタンス表示 `シンプル / ノーマル`
+- 表示サイズ `小 / 中 / 大`
+- 表示形式 `シンプル / ノーマル`
 - テーマ `ライト / アッシュ / ダークブルー / ダーク`
 - 自動更新 `なし / 10分 / 30分`
 
 
-### インスタンス表示
+### フレンド表示
 
-オプションの「インスタンス表示」は `ノーマル` が初期値です。
+- フレンド表示の人数表記はノーマル/シンプルとも `フレンド数 / 参加人数 / 最大人数` です。
+- ノーマルのホバープレビューは参加者が少なくても5人分程度の横幅を確保し、タイトルや人数情報を読みやすくします。シンプルは参加者数に応じたコンパクト幅のままです。
+
+右上の `フレンド` で、通常の「インスタンス → フレンド」表示から「フレンド → 現在の居場所」表示へ切り替えられます。
+
+- Favorite List 1〜3（ユーザーが変更したリスト名がある場合はその名称）と `その他` に分けて表示します。
+- 各セクションはタイトルクリックで折り畳みできます。`その他` は起動時に折り畳まれ、折り畳み中はそのセクションのカードを生成しないためInstance / World詳細の不要なHydrationを抑えます。
+- `Other Platformを表示` がOFFの場合、Other Platformのフレンドはこの表示からも除外します。
+- 並び順は `名前順` / `居場所順` を切り替えられます。
+- 設定の `表示サイズ` と `表示形式` はフレンド表示にも反映します。シンプルでは公開範囲・参加人数等をサムネイル上へまとめてカード幅を縮めます。リージョンはシンプル表示では省略します。
+- Other Platformは `Other Platform` と表示し、サムネイルのプレースホルダーには白黒の地球アイコンを使用します。
+- ユーザーカードへ約0.55秒カーソルを合わせると、そのインスタンスの既存カード相当のプレビューを表示します。プレビューでは把握できている参加者一覧を確認でき、Join可能なインスタンスでは `Invite Me` も利用できます。
+- Private / Other Platform はホバープレビューを表示しません。プレビューはマウスポインタ右下付近に表示し、参加者は最大5列で折り返します。
+- フレンドカードは画面幅に応じて均等に可変し、Favorite Listごとの人数差でカード幅が変わらないようにしています。
+
+### Favorite登録・解除
+
+オンラインフレンドのアバター右上にFavorite操作ボタンを表示します。Favorite済みは星、未登録は星なしの丸いボタンです。クリックすると現在のFavorite List名を使ったメニューが開き、Favorite List 1〜3相当への登録・移動、Favorite解除を行えます。Favorite List移動はVRChat API上で削除→再登録となるため、再登録そのものに失敗した場合は元のFavorite Listへの復元を試みます。変更後の再同期だけが失敗した場合は、成功済みの変更をロールバックせずローカル表示へ反映し、次回更新時に再確認します。Favorite List名の取得に一時的に失敗した場合は、前回取得済みのカスタム名を維持します。
+
+Favorite操作と `Invite Me` の一時的な処理状況・結果は、一覧のレイアウトを押し下げない右上のトースト通知で表示します。
+
+### 表示形式
+
+オプションの「表示形式」は `ノーマル` が初期値です。
 
 - `ノーマル`：従来どおり、ワールド名・インスタンス公開範囲/リージョン・人数・フレンド数・Invite Me・参加ユーザーを表示します。サムネイル右上は `フレンド数 / 参加人数 / 最大人数` で表示します。
 - `シンプル`：1段時はカードの高さを参加ユーザーのアバター高さまで圧縮します。参加ユーザーが増えるとカード自体は2段・3段…と必要な高さまで伸びますが、サムネイルはノーマル表示の高さを上限として上部固定で表示し、それ以上は拡大しません。
 - `シンプル` のサムネイル上部にはインスタンス公開範囲、`Invite Me`、`フレンド数 / 参加人数 / 最大人数` を表示します。
 - `シンプル` では通常インスタンスとPrivateの両方で、ユーザー名をアバター下部の半透明オーバーレイに表示します。Privateもアバター高さを基準にコンパクト化し、人数が多い場合は必要な段数だけ伸びます。
-- `シンプル` でもインスタンスサイズ `小 / 中 / 大` は有効です。
+- `シンプル` でも表示サイズ `小 / 中 / 大` は有効です。
 
 
 ## 必要なもの

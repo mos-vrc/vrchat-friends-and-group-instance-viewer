@@ -38,7 +38,7 @@ export class InstanceHydrationController {
     if (!this.root) return;
     this.disconnect();
 
-    const cards = [...this.root.querySelectorAll('.card')];
+    const cards = [...this.root.querySelectorAll('.card, .friend-location-item[data-location]')];
     const visibleLocations = new Set(cards.map((card) => card.dataset.location).filter(Boolean));
     // Keep active requests alive, but discard queued work for cards that are
     // no longer rendered (for example after a tab switch). This prevents a

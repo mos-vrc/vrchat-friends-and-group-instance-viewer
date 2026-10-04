@@ -32,7 +32,6 @@ import {
 } from './domain.js';
 
 const elements = {
-  account: document.getElementById('account'),
   status: document.getElementById('status'),
   statusRow: document.getElementById('statusRow'),
   updatedAt: document.getElementById('updatedAt'),
@@ -52,10 +51,23 @@ const elements = {
   friendSort: document.getElementById('friendSort'),
   instanceDisplay: document.getElementById('instanceDisplay'),
   autoRefresh: document.getElementById('autoRefresh'),
+  actionToast: document.getElementById('actionToast'),
+  friendInstancePreview: document.getElementById('friendInstancePreview'),
+  favoriteMenu: document.getElementById('favoriteMenu'),
 };
 
 const uiStorage = new JsonStorage();
 const repository = new DataRepository(new VrchatApiClient(), uiStorage);
+
+const VIEW_MODES = Object.freeze({
+  INSTANCES: 'instances',
+  FRIENDS: 'friends',
+});
+
+const FRIEND_VIEW_SORTS = Object.freeze({
+  NAME: 'name',
+  LOCATION: 'location',
+});
 
 // Pass bound cache readers into pure domain code; never hand a repository object
 // whose methods would lose their `this` receiver when extracted as callbacks.
@@ -65,8 +77,10 @@ const locationCacheReader = Object.freeze({
 });
 
 const state = {
+  viewMode: VIEW_MODES.INSTANCES,
   tab: TABS.FAVORITE_PLUS,
   sort: SORTS.FRIENDS_DESC,
+  friendViewSort: FRIEND_VIEW_SORTS.NAME,
   instanceSize: 'medium',
   instanceDisplay: 'normal',
   friendSort: 'favorite_list',
@@ -75,8 +89,10 @@ const state = {
   autoRefreshTimer: null,
   sidebarCollapsed: false,
   statusTimer: null,
+  toastTimer: null,
   user: null,
   favorites: new Set(),
+  favoriteRecords: new Map(),
   favoriteGroups: [],
   requestedFriendFilter: 'favorite',
   friends: [],
@@ -91,6 +107,21 @@ const state = {
   },
   dataFromCache: false,
   lastLoadedAt: 0,
+  collapsedFriendGroups: new Set(['ungrouped']),
+  friendPreview: {
+    openTimer: null,
+    closeTimer: null,
+    friendId: '',
+    location: '',
+    anchor: null,
+    pointerX: 0,
+    pointerY: 0,
+  },
+  favoriteMenu: {
+    userId: '',
+    anchor: null,
+    busy: false,
+  },
 };
 
 function readUiPreferences() {
@@ -100,8 +131,10 @@ function readUiPreferences() {
 
 function persistUiPreferences() {
   uiStorage.set(CONFIG.UI_PREFERENCES_KEY, {
+    viewMode: state.viewMode,
     tab: state.tab,
     sort: state.sort,
+    friendViewSort: state.friendViewSort,
     instanceSize: state.instanceSize,
     instanceDisplay: state.instanceDisplay,
     friendSort: state.friendSort,
@@ -115,8 +148,14 @@ function persistUiPreferences() {
 
 function restoreUiPreferences() {
   const prefs = readUiPreferences();
+  state.viewMode = Object.values(VIEW_MODES).includes(prefs.viewMode)
+    ? prefs.viewMode
+    : VIEW_MODES.INSTANCES;
   state.tab = Object.values(TABS).includes(prefs.tab) ? prefs.tab : TABS.FAVORITE_PLUS;
   state.sort = Object.values(SORTS).includes(prefs.sort) ? prefs.sort : SORTS.FRIENDS_DESC;
+  state.friendViewSort = Object.values(FRIEND_VIEW_SORTS).includes(prefs.friendViewSort)
+    ? prefs.friendViewSort
+    : FRIEND_VIEW_SORTS.NAME;
   state.instanceSize = ['small', 'medium', 'large'].includes(prefs.instanceSize)
     ? prefs.instanceSize
     : 'medium';
@@ -157,7 +196,7 @@ function restoreUiPreferences() {
       ? prefs.showOnWebsite
       : false;
   }
-  if (elements.sort) elements.sort.value = state.sort;
+  applyMainSortOptions();
 }
 
 function updateInstanceSizeButtons() {
@@ -268,6 +307,23 @@ function setFavoriteGroupState(groups) {
   renderFriendFilterOptions();
 }
 
+function applyFavoriteState(favoriteState) {
+  state.favorites = favoriteState?.ids instanceof Set ? favoriteState.ids : new Set();
+  state.favoriteRecords = favoriteState?.records instanceof Map ? favoriteState.records : new Map();
+  setFavoriteGroupState(favoriteState?.groups || []);
+}
+
+function favoriteGroupForUser(userId) {
+  return state.favoriteGroups.find((group) => group?.memberIds?.has(userId))?.name || '';
+}
+
+function renderFavoriteActionButton(userId, extraClass = '') {
+  if (!userId || !state.friendIndex.has(userId)) return '';
+  const isFavorite = state.favorites.has(userId);
+  const label = isFavorite ? 'Favoriteを編集' : 'Favoriteに追加';
+  return `<button class="favorite-action-button favorite-badge${isFavorite ? ' is-favorite' : ''}${extraClass ? ` ${extraClass}` : ''}" type="button" data-favorite-user-id="${escapeHtml(userId)}" aria-label="${label}" title="${label}"><span class="favorite-action-symbol" aria-hidden="true">${isFavorite ? '★' : ''}</span></button>`;
+}
+
 function renderFriendFilterOptions() {
   if (!elements.friendFilter) return;
 
@@ -319,9 +375,65 @@ function setTransientStatus(message, { error = false, delay = 2800 } = {}) {
   }, delay);
 }
 
+function clearActionToastTimer() {
+  if (!state.toastTimer) return;
+  clearTimeout(state.toastTimer);
+  state.toastTimer = null;
+}
+
+function hideActionToast() {
+  clearActionToastTimer();
+  if (!elements.actionToast) return;
+  elements.actionToast.classList.remove('is-visible', 'error');
+  elements.actionToast.textContent = '';
+}
+
+function showActionToast(message, { error = false, delay = 2800 } = {}) {
+  if (!elements.actionToast) return;
+  clearActionToastTimer();
+  const text = String(message || '').trim();
+  if (!text) {
+    hideActionToast();
+    return;
+  }
+  elements.actionToast.textContent = text;
+  elements.actionToast.classList.toggle('error', Boolean(error));
+  elements.actionToast.classList.add('is-visible');
+  if (delay > 0) {
+    state.toastTimer = window.setTimeout(() => {
+      state.toastTimer = null;
+      if (elements.actionToast?.textContent === text) hideActionToast();
+    }, delay);
+  }
+}
+
+function applyMainSortOptions() {
+  if (!elements.sort) return;
+  if (state.viewMode === VIEW_MODES.FRIENDS) {
+    elements.sort.innerHTML = `
+      <option value="name">名前順</option>
+      <option value="location">居場所順</option>`;
+    elements.sort.value = Object.values(FRIEND_VIEW_SORTS).includes(state.friendViewSort)
+      ? state.friendViewSort
+      : FRIEND_VIEW_SORTS.NAME;
+    elements.sort.setAttribute('aria-label', 'フレンド表示の並び順');
+  } else {
+    elements.sort.innerHTML = `
+      <option value="friends_desc">フレンドが多い順</option>
+      <option value="users_desc">参加人数が多い順</option>`;
+    elements.sort.value = Object.values(SORTS).includes(state.sort)
+      ? state.sort
+      : SORTS.FRIENDS_DESC;
+    elements.sort.setAttribute('aria-label', 'インスタンスの並び順');
+  }
+}
+
 function updateTabButtons() {
   document.querySelectorAll('.tab').forEach((button) => {
-    const active = button.dataset.filter === state.tab;
+    const isFriendView = button.dataset.view === VIEW_MODES.FRIENDS;
+    const active = isFriendView
+      ? state.viewMode === VIEW_MODES.FRIENDS
+      : state.viewMode === VIEW_MODES.INSTANCES && button.dataset.filter === state.tab;
     button.classList.toggle('active', active);
     button.setAttribute('aria-selected', String(active));
   });
@@ -367,6 +479,14 @@ function scheduleHighlightClear(location) {
   }, 1000);
 }
 
+function friendSortName(friend) {
+  return String(friend?.displayName || friend?.username || friend?.id || '');
+}
+
+function compareFriendNames(a, b) {
+  return friendSortName(a).localeCompare(friendSortName(b), 'ja');
+}
+
 function getFriendSidebarRows() {
   const filter = elements.friendFilter?.value || 'all';
   const query = String(elements.friendSearch?.value || '').trim().toLocaleLowerCase('ja-JP');
@@ -401,9 +521,6 @@ function getFriendSidebarRows() {
     return haystack.includes(query);
   });
 
-  const friendName = (friend) => String(friend.displayName || friend.username || friend.id || '');
-  const compareNames = (a, b) => friendName(a).localeCompare(friendName(b), 'ja');
-
   if (state.friendSort === 'favorite_list') {
     const groupsByName = new Map(state.favoriteGroups.map((group) => [group.name, group]));
     const orderedGroups = ['group_0', 'group_1', 'group_2']
@@ -420,7 +537,7 @@ function getFriendSidebarRows() {
     return filtered.sort((a, b) => {
       const rankDifference = favoriteListRank(a) - favoriteListRank(b);
       if (rankDifference) return rankDifference;
-      return compareNames(a, b);
+      return compareFriendNames(a, b);
     });
   }
 
@@ -428,11 +545,11 @@ function getFriendSidebarRows() {
     return filtered.sort((a, b) => {
       const favoriteDifference = Number(state.favorites.has(b.id)) - Number(state.favorites.has(a.id));
       if (favoriteDifference) return favoriteDifference;
-      return compareNames(a, b);
+      return compareFriendNames(a, b);
     });
   }
 
-  return filtered.sort(compareNames);
+  return filtered.sort(compareFriendNames);
 }
 
 function friendAvatarUrl(friend) {
@@ -470,7 +587,7 @@ function renderFriendSidebar() {
       <div class="friend-item" data-friend-id="${escapeHtml(friend.id)}" tabindex="0" role="button" aria-label="${escapeHtml(name)}">
         <div class="friend-avatar-wrap">
           ${avatar}
-          ${state.favorites.has(friend.id) ? '<span class="favorite-badge" title="Favorite">★</span>' : ''}
+          ${renderFavoriteActionButton(friend.id)}
         </div>
         <div class="friend-copy">
           <div class="friend-name">
@@ -486,10 +603,231 @@ function renderFriendSidebar() {
 }
 
 function setActiveTab(tab, { resetScroll = true } = {}) {
+  state.viewMode = VIEW_MODES.INSTANCES;
   state.tab = Object.values(TABS).includes(tab) ? tab : TABS.FAVORITE_PLUS;
+  applyMainSortOptions();
   persistUiPreferences();
   updateTabButtons();
   render({ resetScroll });
+}
+
+function setFriendView({ resetScroll = true } = {}) {
+  state.viewMode = VIEW_MODES.FRIENDS;
+  clearInstanceHighlight();
+  applyMainSortOptions();
+  persistUiPreferences();
+  updateTabButtons();
+  render({ resetScroll });
+}
+
+function reverseEntryForFriend(friend) {
+  const location = resolveFriendLocation(friend);
+  if (!location || location === 'offline') return null;
+  return state.instances.find((entry) => entry.location === location) || null;
+}
+
+function friendLocationLabel(friend, entry = reverseEntryForFriend(friend)) {
+  const status = onlineStatusInfo(friend);
+  if (status.className === 'online-website') return 'Other Platform';
+  const location = resolveFriendLocation(friend);
+  const permission = entry?.permission || classifyPermission(location);
+  if (permission === PERMISSIONS.PRIVATE || location === 'private') return 'Private';
+  const worldName = entry?.world?.name || entry?.instanceData?.world?.name || '';
+  if (worldName) return worldName;
+  if (entry?.worldId && entry.worldId !== 'offline' && entry.worldId !== 'private') return 'ワールド情報を取得中…';
+  return permissionLabel(permission);
+}
+
+function friendLocationSortKey(friend) {
+  const entry = reverseEntryForFriend(friend);
+  const status = onlineStatusInfo(friend);
+  const location = resolveFriendLocation(friend);
+  const permission = entry?.permission || classifyPermission(location);
+
+  // 居場所順は、通常インスタンスをワールド名順で先に表示し、
+  // その後に Private、最後に Other Platform を並べる。
+  if (status.className === 'online-website') {
+    return '2\u0000Other Platform';
+  }
+  if (permission === PERMISSIONS.PRIVATE || location === 'private') {
+    return '1\u0000Private';
+  }
+
+  const label = friendLocationLabel(friend, entry);
+  return `0\u0000${label}\u0000${location}`;
+}
+
+function sortReverseFriends(friends) {
+  const rows = [...(friends || [])];
+  if (state.friendViewSort === FRIEND_VIEW_SORTS.LOCATION) {
+    return rows.sort((a, b) => friendLocationSortKey(a).localeCompare(friendLocationSortKey(b), 'ja') || compareFriendNames(a, b));
+  }
+  return rows.sort(compareFriendNames);
+}
+
+function getReverseFriendGroups() {
+  const showOtherPlatform = elements.showOnWebsite?.checked !== false;
+  const onlineFriends = state.friends.filter((friend) => {
+    if (!friendIsOnline(friend)) return false;
+    if (!showOtherPlatform && onlineStatusInfo(friend).className === 'online-website') return false;
+    return true;
+  });
+  const groupsByName = new Map(state.favoriteGroups.map((group) => [group.name, group]));
+  const ordered = ['group_0', 'group_1', 'group_2'].map((name, index) => {
+    const group = groupsByName.get(name);
+    return {
+      id: name,
+      label: group?.displayName || `Favorite List ${index + 1}`,
+      memberIds: group?.memberIds instanceof Set ? group.memberIds : new Set(),
+      friends: [],
+    };
+  });
+  const ungrouped = { id: 'ungrouped', label: 'その他', memberIds: new Set(), friends: [] };
+
+  // A friend can theoretically appear in more than one Favorite List. To keep
+  // the reverse view duplicate-free, use the first/highest Favorite List just
+  // like the existing Favorite List sort does.
+  for (const friend of onlineFriends) {
+    const group = ordered.find((candidate) => candidate.memberIds.has(friend.id));
+    (group || ungrouped).friends.push(friend);
+  }
+
+  const sections = [...ordered, ungrouped];
+  sections.forEach((section) => { section.friends = sortReverseFriends(section.friends); });
+  return sections;
+}
+
+function renderFriendLocationPlaceholderIcon({ isPrivate = false, isWebsite = false } = {}) {
+  if (isPrivate) {
+    return `<svg class="friend-location-placeholder-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M8 10V7.5a4 4 0 0 1 8 0V10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
+  }
+  if (isWebsite) {
+    return `<svg class="friend-location-placeholder-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9S14.5 18.5 12 21M12 3C9.5 5.5 8.2 8.5 8.2 12S9.5 18.5 12 21" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+    </svg>`;
+  }
+  return '<span class="friend-location-placeholder-ellipsis" aria-hidden="true">…</span>';
+}
+
+function renderFriendLocationItem(friend) {
+  if (!friend) return '';
+  const name = friend.displayName || friend.username || friend.id;
+  const status = onlineStatusInfo(friend);
+  const location = resolveFriendLocation(friend);
+  const entry = reverseEntryForFriend(friend);
+  const permission = entry?.permission || classifyPermission(location);
+  const isWebsite = status.className === 'online-website';
+  const isPrivate = permission === PERMISSIONS.PRIVATE || location === 'private';
+  const avatarUrl = friendAvatarUrl(friend);
+  const avatar = avatarUrl
+    ? `<img class="friend-location-avatar" src="${escapeHtml(avatarUrl)}" loading="lazy" alt="${escapeHtml(name)}">`
+    : '<div class="friend-location-avatar friend-location-avatar-empty"></div>';
+  const profileUrl = CONFIG.DEBUG_MODE ? '' : buildUserProfileUrl(friend.id);
+  const avatarContent = profileUrl
+    ? `<a class="friend-location-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${avatar}</a>`
+    : avatar;
+
+  const worldName = friendLocationLabel(friend, entry);
+  const groupName = entry?.groupName || entry?.instanceData?.group?.name || entry?.instanceData?.groupName || '';
+  const launchUrl = entry && !isPrivate && !isWebsite ? buildInstanceLaunchUrl(entry) : '';
+  const worldUrl = entry && !isPrivate && !isWebsite ? buildWorldUrl(entry) : '';
+  const permissionClass = permissionBadgeClass(permission);
+  const region = entry?.region ? regionLabel(entry.region) : '';
+  const locationTitle = groupName ? `${worldName} / ${groupName}` : worldName;
+
+  let countText = '';
+  if (entry && !isPrivate && !isWebsite) {
+    const userCount = effectiveInstanceUserCount(entry, friendMap());
+    const capacity = entry.world?.capacity ?? entry.capacity ?? entry.world?.hardCapacity;
+    const friendCount = uniqueUsers(entry.friends).length;
+    countText = `${friendCount}/${userCount}/${Number.isFinite(capacity) ? capacity : '-'}`;
+  }
+
+  const thumb = entry && !isPrivate && !isWebsite
+    ? safeImageUrl(entry.world?.thumbnailImageUrl || entry.instanceData?.world?.thumbnailImageUrl || entry.instanceData?.world?.imageUrl || '')
+    : '';
+  const thumbContent = thumb
+    ? `<img class="friend-location-thumb" src="${escapeHtml(thumb)}" loading="lazy" decoding="async" alt="">`
+    : `<div class="friend-location-thumb friend-location-thumb-placeholder">${renderFriendLocationPlaceholderIcon({ isPrivate, isWebsite })}</div>`;
+  const simpleStatusText = isWebsite
+    ? 'Other Platform'
+    : isPrivate
+      ? 'Private'
+      : permissionLabel(permission);
+  const simpleCountText = !isWebsite && !isPrivate && countText ? countText : '';
+  const thumbOverlay = `
+    <div class="friend-location-thumb-simple-meta">
+      <span class="friend-state friend-location-thumb-simple-status ${permissionClass}">${escapeHtml(simpleStatusText)}</span>
+      ${simpleCountText ? `<span class="friend-location-thumb-simple-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(simpleCountText)}</span>` : ''}
+    </div>
+    <div class="friend-location-thumb-simple-title" title="${escapeHtml(locationTitle)}">${escapeHtml(locationTitle)}</div>`;
+  const thumbWrapped = worldUrl
+    ? `<a class="friend-location-thumb-link" href="${escapeHtml(worldUrl)}" target="_blank" rel="noopener noreferrer" title="ワールドページを開く">${thumbContent}${thumbOverlay}</a>`
+    : `<div class="friend-location-thumb-link">${thumbContent}${thumbOverlay}</div>`;
+
+  const locationMeta = isWebsite
+    ? `<span class="friend-state friend-location-permission ${permissionClass}">Other Platform</span>`
+    : isPrivate
+      ? `<span class="friend-state friend-location-permission ${permissionClass}">Private</span>`
+      : `<span class="friend-state friend-location-permission ${permissionClass}">${escapeHtml(permissionLabel(permission))}</span>${region ? `<span class="friend-location-region">${escapeHtml(region)}</span>` : ''}${countText ? `<span class="friend-location-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(countText)}</span>` : ''}`;
+
+  const locationName = launchUrl
+    ? `<a class="friend-location-world-link" href="${escapeHtml(launchUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式Launchページを開く">${escapeHtml(locationTitle)}</a>`
+    : `<span class="friend-location-world-name" title="${escapeHtml(locationTitle)}">${escapeHtml(locationTitle)}</span>`;
+
+  const locationData = entry?.location && !isPrivate ? ` data-location="${escapeHtml(entry.location)}"` : '';
+  const previewDisabledClass = isPrivate || isWebsite ? ' friend-location-no-preview' : '';
+  return `
+    <article class="friend-location-item${entry && needsHydration(entry) ? ' friend-location-loading' : ''}${previewDisabledClass}" data-friend-id="${escapeHtml(friend.id)}"${locationData}>
+      <div class="friend-location-avatar-wrap">
+        ${avatarContent}
+        <span class="online-dot ${status.className} friend-location-online-dot" title="${escapeHtml(status.label)}" aria-label="${escapeHtml(status.label)}">●</span>
+        ${renderFavoriteActionButton(friend.id, 'friend-location-favorite')}
+      </div>
+      <div class="friend-location-copy">
+        <div class="friend-location-name-line">
+          ${profileUrl ? `<a class="friend-location-name" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}</a>` : `<span class="friend-location-name">${escapeHtml(name)}</span>`}
+        </div>
+        <div class="friend-location-world-line">${locationName}</div>
+        <div class="friend-location-meta">${locationMeta}</div>
+      </div>
+      ${thumbWrapped}
+    </article>`;
+}
+
+function renderFriendLocationView() {
+  const groups = getReverseFriendGroups();
+  const sections = groups.map((group, index) => {
+    const isFavoriteGroup = index < 3;
+    const collapsed = state.collapsedFriendGroups.has(group.id);
+    const icon = isFavoriteGroup ? '★' : '●';
+    const rows = collapsed
+      ? ''
+      : group.friends.length
+        ? group.friends.map(renderFriendLocationItem).join('')
+        : '<div class="friend-location-section-empty">オンラインのフレンドはいません</div>';
+    return `
+      <section class="friend-location-section${collapsed ? ' is-collapsed' : ''}" data-favorite-group="${escapeHtml(group.id)}">
+        <button class="friend-location-section-header" type="button"
+                data-friend-group-toggle="${escapeHtml(group.id)}"
+                aria-expanded="${String(!collapsed)}"
+                title="${collapsed ? '展開' : '折り畳む'}">
+          <span class="friend-location-section-title">
+            <span class="friend-location-section-chevron" aria-hidden="true">${collapsed ? '▶' : '▼'}</span>
+            <span class="friend-location-section-icon${isFavoriteGroup ? ' is-favorite' : ''}" aria-hidden="true">${icon}</span>
+            ${escapeHtml(group.label)}
+          </span>
+          <span class="friend-location-section-count">${group.friends.length}人</span>
+        </button>
+        ${collapsed ? '' : `<div class="friend-location-grid">${rows}</div>`}
+      </section>`;
+  }).join('');
+
+  return `<div class="friend-location-view">${sections}</div>`;
 }
 
 function buildInstanceLaunchUrl(entry) {
@@ -528,14 +866,15 @@ function renderSummaryPeopleIcon(kind) {
   </svg>`;
 }
 
-function renderParticipantList(entry) {
+function renderParticipantList(entry, { showAll = false } = {}) {
+  const participantState = showAll ? { ...state, tab: TABS.ALL } : state;
   const participants = sortParticipants(
     entry,
-    participantsForEntry(entry, state, friendMap()),
+    participantsForEntry(entry, participantState, friendMap()),
     state,
   );
   if (!participants.length) {
-    const empty = state.tab === TABS.FAVORITE_ONLY
+    const empty = !showAll && state.tab === TABS.FAVORITE_ONLY
       ? '表示対象のFavoriteフレンドはいません'
       : '表示対象のユーザーはいません';
     return `<div class="participant-empty">${escapeHtml(empty)}</div>`;
@@ -567,8 +906,8 @@ function renderParticipantList(entry) {
     const foafBadge = isOwner && !isFriend && isFoafPresentInEntry(entry, user)
       ? '<span class="foaf-badge" title="Friend of a Friend">FOAF</span>'
       : '';
-    const favoriteBadge = state.favorites.has(user.id)
-      ? '<span class="favorite-badge favorite-badge-participant" title="Favorite">★</span>'
+    const favoriteBadge = isFriend
+      ? renderFavoriteActionButton(user.id, 'favorite-badge-participant')
       : '';
 
     return `
@@ -581,11 +920,13 @@ function renderParticipantList(entry) {
   }).join('')}</div>`;
 }
 
-function renderPrivateInstance(entry) {
-  const favoriteMode = state.tab === TABS.FAVORITE_PLUS || state.tab === TABS.FAVORITE_ONLY;
-  const visibleFriends = favoriteMode
-    ? entry.friends.filter((friend) => state.favorites.has(friend.id))
-    : entry.friends;
+function renderPrivateInstance(entry, { showAll = false } = {}) {
+  const favoriteMode = !showAll && (state.tab === TABS.FAVORITE_PLUS || state.tab === TABS.FAVORITE_ONLY);
+  const visibleFriends = showAll
+    ? entry.friends
+    : favoriteMode
+      ? entry.friends.filter((friend) => state.favorites.has(friend.id))
+      : entry.friends;
 
   return `
     <article class="private-card${instanceIsHighlighted(entry) ? ' instance-highlight' : ''}" data-location="${escapeHtml(entry.location)}" aria-label="Private">
@@ -605,7 +946,7 @@ function renderPrivateInstance(entry) {
             <div class="private-user" title="${escapeHtml(name)}">
               <div class="private-avatar-wrap">
                 ${privateAvatarLink}
-                ${state.favorites.has(friend.id) ? '<span class="favorite-badge private-favorite-badge" title="Favorite">★</span>' : ''}
+                ${renderFavoriteActionButton(friend.id, 'private-favorite-badge')}
               </div>
               <div class="private-user-name">${escapeHtml(name)}</div>
             </div>`;
@@ -615,8 +956,8 @@ function renderPrivateInstance(entry) {
     </article>`;
 }
 
-function renderInstanceCard(entry) {
-  if (entry.permission === PERMISSIONS.PRIVATE) return renderPrivateInstance(entry);
+function renderInstanceCard(entry, { preview = false } = {}) {
+  if (entry.permission === PERMISSIONS.PRIVATE) return renderPrivateInstance(entry, { showAll: preview });
 
   const worldName = entry.world?.name
     || entry.instanceData?.world?.name
@@ -638,9 +979,11 @@ function renderInstanceCard(entry) {
   const allFriends = uniqueUsers(entry.friends);
   const allFriendCount = allFriends.length;
   const favoriteFriendCount = allFriends.filter((friend) => state.favorites.has(friend.id)).length;
-  const friendCount = state.tab === TABS.FAVORITE_ONLY
-    ? favoriteFriendCount
-    : allFriendCount;
+  const friendCount = preview
+    ? allFriendCount
+    : state.tab === TABS.FAVORITE_ONLY
+      ? favoriteFriendCount
+      : allFriendCount;
   const userCountText = Number.isFinite(capacity) ? `${userCount} / ${capacity}` : `${userCount}`;
   const thumbnailCountText = `${allFriendCount}/${userCount}/${Number.isFinite(capacity) ? capacity : '-'}`;
   const permissionClass = permissionBadgeClass(entry.permission);
@@ -655,691 +998,3 @@ function renderInstanceCard(entry) {
           : '<div class="thumb thumb-placeholder"></div>'}
         <div class="thumb-fade"></div>
         <div class="badges">
-          <span class="badge ${permissionClass}">${escapeHtml(permissionLabel(entry.permission))}</span>${regionBadge}
-        </div>
-        <div class="people-count" title="フレンド数 / 参加人数 / 最大人数">
-          <span class="people-count-normal">${escapeHtml(thumbnailCountText)}</span>
-          <span class="people-count-simple">${escapeHtml(thumbnailCountText)}</span>
-        </div>
-        <div class="overlay-title" title="${escapeHtml(worldName)}">${escapeHtml(worldName)}</div>
-      ${worldUrl ? '</a>' : '</div>'}
-      <button class="invite-me-button invite-me-button-simple" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInvite Meを送信" ${entry.debug || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>Invite Me</button>
-
-      <div class="info-panel">
-        <div class="instance-title-line">
-          ${launchUrl
-            ? `<a class="instance-title-name instance-title-name-link" href="${escapeHtml(launchUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式Launchページを開く">${escapeHtml(worldName)}</a>`
-            : `<span class="instance-title-name" title="${escapeHtml(worldName)}">${escapeHtml(worldName)}</span>`}
-          ${entry.groupId ? `<span class="instance-title-separator">/</span><span class="instance-title-group" title="${escapeHtml(groupName)}">${escapeHtml(groupName)}</span>` : ''}
-        </div>
-
-        <div class="summary-row">
-          <div class="summary-item permission-summary"><svg class="summary-globe" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
-            <circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
-            <path d="M2.8 10h14.4M10 2.5c2.1 2 3.2 4.5 3.2 7.5S12.1 15.5 10 17.5M10 2.5C7.9 4.5 6.8 7 6.8 10s1.1 5.5 3.2 7.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg><span class="summary-value">${escapeHtml(permissionLabel(entry.permission))}${entry.region ? ` / ${escapeHtml(regionLabel(entry.region))}` : ''}</span></div>
-          <div class="summary-item">${renderSummaryPeopleIcon('world')}<span class="summary-value">${escapeHtml(userCountText)}</span></div>
-          <div class="summary-item friend-count-summary">${renderSummaryPeopleIcon('friends')}<span class="summary-value">${escapeHtml(String(friendCount))}</span><button class="invite-me-button invite-me-button-normal" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInvite Meを送信" ${entry.debug || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>Invite Me</button></div>
-        </div>
-
-        ${renderParticipantList(entry)}
-      </div>
-    </article>`;
-}
-
-async function onInviteMeClick(event) {
-  const button = event.target.closest('.invite-me-button');
-  if (!button || !elements.list.contains(button)) return;
-  event.preventDefault();
-  event.stopPropagation();
-
-  const location = button.dataset.location || '';
-  const entry = getCurrentInstanceEntry(location);
-  if (!entry || !entry.worldId || !entry.instanceId) return;
-  if (CONFIG.DEBUG_MODE || entry.debug) {
-    setStatus('DEBUG MODE: ダミーインスタンスにはInvite Meを送信しません。');
-    return;
-  }
-  if (button.disabled) return;
-
-  button.disabled = true;
-  button.classList.add('is-loading');
-  button.textContent = '送信中…';
-  try {
-    await repository.inviteMyselfTo(location);
-    button.textContent = 'Invited';
-    button.classList.add('is-success');
-    setTransientStatus('Invite Meを送信しました', { delay: 2200 });
-    window.setTimeout(() => {
-      if (!button.isConnected) return;
-      button.textContent = 'Invite Me';
-      button.classList.remove('is-success', 'is-loading');
-      button.disabled = false;
-    }, 1800);
-  } catch (error) {
-    console.warn('Could not send Invite Me:', location, error);
-    button.textContent = 'Invite Me';
-    button.classList.remove('is-loading');
-    button.disabled = false;
-    const message = error?.status === 401
-      ? 'VRChatのログインセッションが無効です。'
-      : error?.status === 404
-        ? 'このインスタンスは存在しないか、Invite Meを送信できません。'
-        : `Invite Meの送信に失敗しました${error?.status ? ` (${error.status})` : ''}`;
-    setStatus(message, true);
-  }
-}
-
-function getCurrentInstanceEntry(location, fallback = null) {
-  return state.instances.find((entry) => entry.location === location) || fallback;
-}
-
-function needsHydration(entry) {
-  if (!entry || entry.debug || entry.permission === PERMISSIONS.PRIVATE) return false;
-
-  // A failed Instance request must become a terminal state for the current
-  // render. Without this guard, `!entry.instanceData` remained true after a
-  // failed request, causing the hydration controller to enqueue the same
-  // location forever. That could monopolize the event loop and freeze the UI.
-  if (!entry.instanceData) {
-    if (entry.instanceFetchFailed) return false;
-    return true;
-  }
-
-  if (!entry.world && !entry.worldFetchFailed
-    && entry.worldId && entry.worldId !== 'offline' && entry.worldId !== 'private') {
-    return true;
-  }
-  return needsNonFriendOwnerProfile(entry, friendMap())
-    || needsInstanceDetailsForFoaf(entry, state, friendMap())
-    || shouldFetchNonFriendOwner(entry, state, friendMap());
-}
-
-function scrollInstanceCardIntoView(location, behavior = 'smooth') {
-  if (!elements.list || !location) return false;
-  const target = [...elements.list.querySelectorAll('[data-location]')]
-    .find((node) => node.dataset.location === location);
-  if (!target) return false;
-  target.scrollIntoView({ behavior, block: 'center' });
-  return true;
-}
-
-function replaceCardInDom(entry) {
-  const currentEntry = getCurrentInstanceEntry(entry?.location, entry);
-  if (!currentEntry) return;
-  const node = [...elements.list.querySelectorAll('[data-location]')]
-    .find((candidate) => candidate.dataset.location === currentEntry.location);
-  if (!node) return;
-
-  hydrationController.unobserveNode(node);
-  const template = document.createElement('template');
-  template.innerHTML = renderInstanceCard(currentEntry).trim();
-  const replacement = template.content.firstElementChild;
-  if (!replacement) return;
-  const scrollTop = elements.list.scrollTop;
-  node.replaceWith(replacement);
-  elements.list.scrollTop = scrollTop;
-  if (needsHydration(currentEntry)) hydrationController.observeNode(replacement);
-
-  // Re-center the focused card after asynchronous hydration replaced its DOM
-  // node. This neutralizes layout shifts caused by the completed request.
-  if (state.highlight.location === currentEntry.location && Date.now() < state.highlight.until) {
-    requestAnimationFrame(() => scrollInstanceCardIntoView(currentEntry.location, 'auto'));
-  }
-}
-
-async function hydrateInstance(location, fallbackEntry) {
-  if (!location) return;
-  let currentEntry = getCurrentInstanceEntry(location, fallbackEntry);
-  if (!currentEntry || currentEntry.permission === PERMISSIONS.PRIVATE) return;
-
-  try {
-    let data = currentEntry.instanceData;
-    if (!data) {
-      try {
-        data = await repository.fetchInstance(location);
-      } catch (error) {
-        currentEntry = getCurrentInstanceEntry(location, currentEntry);
-        currentEntry.instanceFetchFailed = true;
-        currentEntry.foafChecked = true;
-        replaceCardInDom(currentEntry);
-        throw error;
-      }
-    }
-
-    // A successful Instance response completes the one-time FOAF presence
-    // check. If the response omits `users`, FOAF is simply not displayable;
-    // never requeue the same request forever.
-    currentEntry = getCurrentInstanceEntry(location, currentEntry);
-    const changed = !currentEntry.instanceData || currentEntry.instanceData !== data;
-    currentEntry.instanceFetchFailed = false;
-    currentEntry.foafChecked = true;
-    mergeInstanceData(currentEntry, data);
-
-    if (!currentEntry.world && !currentEntry.worldFetchFailed
-      && currentEntry.worldId && currentEntry.worldId !== 'offline' && currentEntry.worldId !== 'private') {
-      try {
-        const world = await repository.fetchWorld(currentEntry.worldId);
-        currentEntry = getCurrentInstanceEntry(location, currentEntry);
-        if (world) {
-          currentEntry.world = world;
-          currentEntry.worldFetchFailed = false;
-        } else {
-          currentEntry.worldFetchFailed = true;
-        }
-      } catch {
-        currentEntry = getCurrentInstanceEntry(location, currentEntry);
-        currentEntry.worldFetchFailed = true;
-      }
-    }
-
-    if (needsNonFriendOwnerProfile(currentEntry, friendMap())
-      || shouldFetchNonFriendOwner(currentEntry, state, friendMap())) {
-      const ownerId = instanceOwnerId(currentEntry);
-      const ownerUser = await repository.fetchUser(ownerId);
-      currentEntry = getCurrentInstanceEntry(location, currentEntry);
-      currentEntry.ownerUserLoaded = true;
-      if (ownerUser) currentEntry.ownerUser = ownerUser;
-    }
-
-    replaceCardInDom(currentEntry);
-  } catch (error) {
-    console.warn('Could not hydrate instance:', location, error);
-  }
-}
-
-const hydrationController = new InstanceHydrationController({
-  root: elements.list,
-  getEntries: () => state.instances,
-  needsHydration,
-  hydrate: hydrateInstance,
-  concurrency: CONFIG.HYDRATE_CONCURRENCY,
-  preloadPx: CONFIG.HYDRATE_PRELOAD_PX,
-  initialCount: CONFIG.INITIAL_HYDRATE_COUNT,
-});
-
-function render({ resetScroll = false, hydrationMode = 'normal', priorityLocation = '' } = {}) {
-  const friendScroll = elements.friendList?.scrollTop || 0;
-  const rightScroll = resetScroll ? 0 : elements.list?.scrollTop || 0;
-  hydrationController.disconnect();
-
-  updateTabButtons();
-  renderFriendSidebar();
-
-  const data = getVisibleInstances();
-  const appVersion = globalThis.chrome?.runtime?.getManifest?.().version || '1.4.29';
-  const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
-  if (!data.length) {
-    elements.list.innerHTML = `<div class="empty">表示できるインスタンスはありません。</div>${credit}`;
-  } else {
-    elements.list.innerHTML = `${data.map(renderInstanceCard).join('')}${credit}`;
-  }
-
-  elements.friendList.scrollTop = friendScroll;
-  elements.list.scrollTop = rightScroll;
-  hydrationController.sync({
-    mode: hydrationMode,
-    priorityLocations: priorityLocation ? [priorityLocation] : [],
-  });
-}
-
-function focusFriendInstance(friend) {
-  if (!friend || !friendIsOnline(friend)) return;
-  const location = resolveFriendLocation(friend);
-  if (!location || location === 'offline') return;
-
-  const targetTab = state.favorites.has(friend.id) ? TABS.FAVORITE_PLUS : TABS.ALL;
-  state.tab = targetTab;
-  persistUiPreferences();
-  updateTabButtons();
-  const targetEntry = filterAndSortInstances(state.instances, state, friendMap())
-    .find((entry) => entry.location === location);
-
-  clearInstanceHighlight();
-  if (!targetEntry) {
-    render({ resetScroll: false });
-    setTransientStatus(
-      targetTab === TABS.FAVORITE_PLUS
-        ? 'このフレンドのインスタンスはFavorite+には表示されません'
-        : 'このフレンドのインスタンスは「すべて」には表示されません',
-      { delay: 3200 },
-    );
-    return;
-  }
-
-  // Mark the target before rendering so the card is painted with the
-  // highlight from its first frame. Bulk hydration is suppressed for this
-  // focus transition; only the target instance may issue a detail request.
-  state.highlight.location = location;
-  state.highlight.until = Date.now() + 1000;
-  render({
-    resetScroll: false,
-    hydrationMode: 'focus',
-    priorityLocation: location,
-  });
-
-  // Deterministic positioning after the DOM is committed. Use an immediate
-  // center first, then one more frame in case the browser has not completed
-  // layout yet. The highlighted card itself re-centers again if its async
-  // hydration replaces the DOM node.
-  requestAnimationFrame(() => {
-    scrollInstanceCardIntoView(location, 'auto');
-    requestAnimationFrame(() => scrollInstanceCardIntoView(location, 'auto'));
-  });
-
-  scheduleHighlightClear(location);
-
-  // Resume ordinary lazy hydration only after the one-second highlight has
-  // finished, so the focus operation cannot be destabilized by a bulk burst
-  // of requests. This does not refetch friends/favorites/groups.
-  if (state.highlight.resumeTimer) clearTimeout(state.highlight.resumeTimer);
-  state.highlight.resumeTimer = setTimeout(() => {
-    state.highlight.resumeTimer = null;
-    hydrationController.sync();
-  }, CONFIG.FOCUS_HYDRATION_DELAY_MS);
-}
-
-function updateLoadedAtLabel() {
-  if (!elements.updatedAt) return;
-  if (!state.lastLoadedAt) {
-    elements.updatedAt.textContent = '更新: --:--:--';
-    elements.updatedAt.title = '最終更新';
-    return;
-  }
-
-  const date = new Date(state.lastLoadedAt);
-  const time = [date.getHours(), date.getMinutes(), date.getSeconds()]
-    .map((value) => String(value).padStart(2, '0'))
-    .join(':');
-  const label = `更新: ${time}`;
-  elements.updatedAt.textContent = label;
-  elements.updatedAt.title = state.dataFromCache ? `${label}（一部キャッシュ）` : label;
-}
-
-async function refreshGroupDataInBackground(userId) {
-  try {
-    const groupInstances = await repository.fetchGroupInstances(userId);
-    state.instances = buildLocations(
-      createFriendLocationMap(state.friends),
-      groupInstances,
-      locationCacheReader,
-    );
-    const focusRemaining = Math.max(0, state.highlight.until - Date.now());
-    if (state.highlight.location && focusRemaining > 0) {
-      setTimeout(() => {
-        if (state.highlight.location) render();
-      }, focusRemaining + 16);
-    } else {
-      render();
-    }
-    state.dataFromCache = Boolean(repository.usedStaleFallback);
-    updateLoadedAtLabel();
-
-    const missingGroupIds = [...new Set(
-      state.instances
-        .filter((entry) => entry.groupId && !entry.groupName)
-        .map((entry) => entry.groupId),
-    )].slice(0, CONFIG.MAX_GROUP_LOOKUPS);
-
-    // Group name lookups are deliberately fire-and-update. Do not keep the
-    // whole UI in a loading state while up to 100 group requests run.
-    await mapWithConcurrency(
-      missingGroupIds,
-      async (groupId) => {
-        const group = await repository.fetchGroup(groupId);
-        const id = group?.groupId || group?.id;
-        const name = group?.name || group?.shortCode || '';
-        if (!id || !name) return;
-
-        // A single VRChat Group can have multiple active instances. The lookup
-        // is deduplicated by groupId, so fan the resolved name out to every
-        // matching instance instead of updating only the first card.
-        const matchingEntries = state.instances.filter((candidate) => candidate.groupId === id);
-        if (!matchingEntries.length) return;
-        matchingEntries.forEach((entry) => {
-          entry.groupName = name;
-          replaceCardInDom(entry);
-        });
-      },
-      CONFIG.GROUP_LOOKUP_CONCURRENCY,
-    );
-  } catch (error) {
-    if (error?.status === 401) throw error;
-    console.warn('Could not refresh group instances:', error);
-  }
-}
-
-async function ensureApiUserAgentRule() {
-  if (!globalThis.chrome?.runtime?.sendMessage) return false;
-  try {
-    const response = await chrome.runtime.sendMessage({ type: 'ENSURE_API_USER_AGENT_RULE' });
-    return Boolean(response?.installed);
-  } catch {
-    // User-Agent identification is important for VRChat API usage, but a
-    // browser/runtime that cannot register the rule should not make the UI
-    // itself unusable. The API request path remains otherwise unchanged.
-    return false;
-  }
-}
-
-
-
-function createDebugData() {
-  const count = Math.max(1, Math.floor(Number(CONFIG.DEBUG_FRIEND_COUNT) || 20));
-  const favoriteCount = Math.min(count, Math.max(0, Math.floor(Number(CONFIG.DEBUG_FAVORITE_COUNT) || 2)));
-  const specs = [
-    { kind: 'public', count, worldNumber: 1, region: 'jp', name: `Debug Public World (${count} Friends)` },
-    { kind: 'group', count, worldNumber: 2, region: 'us', name: 'Debug Group World' },
-    { kind: 'private', count, worldNumber: 3, region: 'jp', name: 'Private' },
-  ];
-  let nextFriendNumber = 0;
-  const favorites = new Set();
-  const favoriteGroupMembers = [new Set(), new Set(), new Set()];
-  const friends = [];
-  const instances = specs.map((spec, specIndex) => {
-    const worldId = `wrld_00000000-0000-0000-0000-${String(spec.worldNumber).padStart(12, '0')}`;
-    const ownerNumber = nextFriendNumber + 1;
-    const ownerId = `usr_00000000-0000-0000-0000-${String(ownerNumber).padStart(12, '0')}`;
-    const groupId = 'grp_00000000-0000-0000-0000-000000000001';
-    const instanceId = spec.kind === 'group'
-      ? `debug-group-002~group(${groupId})~groupAccessType(public)~region(${spec.region})`
-      : `debug-${String(spec.worldNumber).padStart(3, '0')}~region(${spec.region})`;
-    const location = spec.kind === 'private' ? 'private' : `${worldId}:${instanceId}`;
-    const members = Array.from({ length: spec.count }, (_, offset) => {
-      const number = ++nextFriendNumber;
-      const friend = {
-        id: `usr_00000000-0000-0000-0000-${String(number).padStart(12, '0')}`,
-        displayName: `Debug Friend ${String(number).padStart(2, '0')}`,
-        username: `debug_friend_${String(number).padStart(2, '0')}`,
-        status: number % 11 === 0 ? 'join me' : number % 7 === 0 ? 'busy' : 'active',
-        location,
-      };
-      // Keep Favorite counts deterministic for layout/filter testing.
-      if (offset < favoriteCount) {
-        favorites.add(friend.id);
-        favoriteGroupMembers[specIndex]?.add(friend.id);
-      }
-      friends.push(friend);
-      return friend;
-    });
-    if (spec.kind === 'private') {
-      return {
-        debug: true, location, source: 'friend', friends: members,
-        worldId: 'private', permission: PERMISSIONS.PRIVATE,
-        permissionLabel: permissionLabel(PERMISSIONS.PRIVATE),
-      };
-    }
-    const capacity = Math.max(80, spec.count);
-    const instanceData = {
-      id: instanceId, instanceId, worldId,
-      ownerId: spec.kind === 'group' ? groupId : ownerId,
-      photonRegion: spec.region, n_users: spec.count, capacity,
-      users: members,
-    };
-    if (spec.kind === 'group') {
-      instanceData.type = 'group';
-      instanceData.groupAccessType = 'public';
-      instanceData.groupName = 'Debug Group';
-    }
-    return {
-      debug: true, location, source: 'friend', friends: members,
-      worldId, instanceId, region: spec.region,
-      permission: spec.kind === 'group' ? PERMISSIONS.GROUP_PUBLIC : PERMISSIONS.PUBLIC,
-      permissionLabel: permissionLabel(spec.kind === 'group' ? PERMISSIONS.GROUP_PUBLIC : PERMISSIONS.PUBLIC),
-      ownerId: spec.kind === 'group' ? undefined : ownerId,
-      groupId: spec.kind === 'group' ? groupId : undefined,
-      groupName: spec.kind === 'group' ? 'Debug Group' : '',
-      groupAccessType: spec.kind === 'group' ? 'public' : undefined,
-      users: spec.count, capacity, instanceData,
-      world: {
-        id: worldId, name: spec.name, capacity, hardCapacity: capacity,
-        thumbnailImageUrl: '',
-      },
-    };
-  });
-  const favoriteGroups = ['group_0', 'group_1', 'group_2'].map((name, index) => ({
-    name,
-    displayName: `Favorite List ${index + 1}`,
-    memberIds: favoriteGroupMembers[index],
-  }));
-  return { friends, favorites, favoriteGroups, instances };
-}
-
-function loadDebugData() {
-  const debug = createDebugData();
-  state.user = {
-    id: 'usr_00000000-0000-0000-0000-999999999999',
-    displayName: 'Debug Mode',
-    username: 'debug_mode',
-  };
-  setFriendState(debug.friends);
-  state.favorites = debug.favorites;
-  setFavoriteGroupState(debug.favoriteGroups);
-  state.instances = debug.instances;
-  state.lastLoadedAt = Date.now();
-  state.dataFromCache = false;
-  if (elements.account) elements.account.textContent = 'Debug Mode';
-  elements.login?.classList.add('hidden');
-  render();
-  updateLoadedAtLabel();
-  setStatus(`DEBUG MODE: 各${Math.max(1, Math.floor(Number(CONFIG.DEBUG_FRIEND_COUNT) || 20))}人・Favorite ${CONFIG.DEBUG_FAVORITE_COUNT}人 / 3インスタンス（Public・Group・Private）`);
-}
-
-async function load() {
-  if (CONFIG.DEBUG_MODE) {
-    loadDebugData();
-    return;
-  }
-  if (state.loading) return;
-  state.loading = true;
-  state.dataFromCache = false;
-  state.lastLoadedAt = 0;
-  repository.usedStaleFallback = false;
-  elements.login?.classList.add('hidden');
-  setStatus('VRChatログインセッションを確認中…');
-
-  try {
-    // Authentication must complete before any account-scoped cache can be used.
-    const user = await repository.fetchMe();
-    state.user = user;
-    if (elements.account) elements.account.textContent = user.displayName || user.username || user.id;
-
-    // Do not paint stale cached lists first. Fetch the time-sensitive primary
-    // datasets first so the first interactive render reflects current data (or
-    // a same-account fallback only when the live request fails).
-    setStatus('フレンド情報を更新中…');
-    const [friends, favoriteState] = await Promise.all([
-      repository.fetchFriends(),
-      repository.fetchFavorites(),
-    ]);
-
-    setFriendState(normalizeFriends(friends));
-    state.favorites = favoriteState.ids;
-    setFavoriteGroupState(favoriteState.groups);
-    state.instances = buildLocations(
-      createFriendLocationMap(state.friends),
-      [],
-      locationCacheReader,
-    );
-
-    state.lastLoadedAt = repository.primaryDataUpdatedAt || Date.now();
-    // Repository exposes whether a primary dataset had to fall back to stale
-    // same-account data. Keep that information visible without blocking the UI.
-    state.dataFromCache = Boolean(repository.usedStaleFallback);
-    render();
-    updateLoadedAtLabel();
-    setStatus('');
-
-    // Group Instances are secondary data for this screen. Load them after the
-    // first interactive paint so tab switching and friend clicks remain
-    // responsive even while group data is being fetched.
-    void refreshGroupDataInBackground(user.id).catch((error) => {
-      if (error?.status === 401) {
-        state.instances = [];
-        setFriendState([]);
-        state.favorites = new Set();
-        setFavoriteGroupState([]);
-        setStatus('VRChatのログインセッションが無効です。VRChat公式サイトで再ログインしてください。', true);
-      }
-    });
-  } catch (error) {
-    if (error?.status === 401) {
-      state.instances = [];
-      setFriendState([]);
-      state.favorites = new Set();
-      setFavoriteGroupState([]);
-      if (elements.account) elements.account.textContent = 'VRChatログインが必要です';
-      elements.list.innerHTML = '';
-      elements.login?.classList.remove('hidden');
-      setStatus('VRChatのログインセッションが無効です。VRChat公式サイトで再ログインしてください。', true);
-    } else {
-      setStatus(`取得に失敗しました: ${error?.message || error}`, true);
-    }
-  } finally {
-    state.loading = false;
-  }
-}
-
-async function mapWithConcurrency(items, worker, concurrency = 2) {
-  const output = new Array(items.length);
-  let nextIndex = 0;
-  const workerCount = Math.min(Math.max(1, concurrency), items.length);
-
-  async function run() {
-    while (true) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= items.length) return;
-      try {
-        output[index] = await worker(items[index], index);
-      } catch {
-        output[index] = null;
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: workerCount }, run));
-  return output;
-}
-
-function onFriendListClick(event) {
-  const item = event.target.closest('.friend-item');
-  if (!item || !elements.friendList.contains(item)) return;
-  focusFriendInstance(state.friends.find((friend) => friend.id === item.dataset.friendId));
-}
-
-function onFriendListKeydown(event) {
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-  const item = event.target.closest('.friend-item');
-  if (!item) return;
-  event.preventDefault();
-  focusFriendInstance(state.friends.find((friend) => friend.id === item.dataset.friendId));
-}
-
-document.querySelectorAll('.tab').forEach((button) => {
-  button.addEventListener('click', () => {
-    clearInstanceHighlight();
-    setActiveTab(button.dataset.filter || TABS.FAVORITE_PLUS);
-  });
-});
-
-elements.sort?.addEventListener('change', () => {
-  state.sort = Object.values(SORTS).includes(elements.sort.value)
-    ? elements.sort.value
-    : SORTS.FRIENDS_DESC;
-  persistUiPreferences();
-  render();
-});
-
-document.querySelectorAll('.instance-size-button').forEach((button) => {
-  button.addEventListener('click', () => {
-    const size = button.dataset.instanceSize;
-    if (!['small', 'medium', 'large'].includes(size) || size === state.instanceSize) return;
-    state.instanceSize = size;
-    applyInstanceSize();
-    persistUiPreferences();
-  });
-});
-
-elements.instanceDisplay?.addEventListener('change', () => {
-  state.instanceDisplay = ['simple', 'normal'].includes(elements.instanceDisplay.value)
-    ? elements.instanceDisplay.value
-    : 'normal';
-  applyInstanceDisplay();
-  persistUiPreferences();
-});
-
-document.querySelectorAll('.theme-button').forEach((button) => {
-  button.addEventListener('click', () => {
-    const theme = button.dataset.theme;
-    if (!['light', 'ash', 'dark-blue', 'dark'].includes(theme) || theme === state.theme) return;
-    state.theme = theme;
-    applyTheme();
-    persistUiPreferences();
-  });
-});
-
-elements.friendSort?.addEventListener('change', () => {
-  state.friendSort = ['name', 'favorite_list'].includes(elements.friendSort.value)
-    ? elements.friendSort.value
-    : 'name';
-  persistUiPreferences();
-  renderFriendSidebar();
-});
-
-elements.autoRefresh?.addEventListener('change', () => {
-  const minutes = Number(elements.autoRefresh.value);
-  state.autoRefreshMinutes = [10, 30].includes(minutes) ? minutes : 0;
-  persistUiPreferences();
-  scheduleAutoRefresh();
-});
-
-elements.settingsButton?.addEventListener('click', () => {
-  toggleSettingsPanel();
-});
-
-elements.sidebarToggle?.addEventListener('click', () => {
-  toggleFriendSidebar();
-});
-
-document.addEventListener('click', (event) => {
-  if (elements.settingsPanel?.classList.contains('hidden')) return;
-  if (event.target.closest('.toolbar-options')) return;
-  setSettingsPanelOpen(false);
-});
-
-document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape') return;
-  if (elements.settingsPanel?.classList.contains('hidden')) return;
-  setSettingsPanelOpen(false);
-  elements.settingsButton?.focus();
-});
-
-elements.friendSearch?.addEventListener('input', () => renderFriendSidebar());
-elements.friendFilter?.addEventListener('change', () => {
-  state.requestedFriendFilter = elements.friendFilter.value || 'favorite';
-  persistUiPreferences();
-  renderFriendSidebar();
-});
-elements.showOnWebsite?.addEventListener('change', () => {
-  persistUiPreferences();
-  renderFriendSidebar();
-});
-elements.clearFriendSearch?.addEventListener('click', () => {
-  if (!elements.friendSearch) return;
-  elements.friendSearch.value = '';
-  elements.friendSearch.focus();
-  renderFriendSidebar();
-});
-elements.friendList?.addEventListener('click', onFriendListClick);
-elements.list?.addEventListener('click', onInviteMeClick);
-elements.friendList?.addEventListener('keydown', onFriendListKeydown);
-elements.loginButton?.addEventListener('click', () => {
-  window.open(CONFIG.LOGIN_URL, '_blank', 'noopener,noreferrer');
-});
-
-restoreUiPreferences();
-updateTabButtons();
-scheduleAutoRefresh();
-if (!CONFIG.DEBUG_MODE) void ensureApiUserAgentRule();
-void load();

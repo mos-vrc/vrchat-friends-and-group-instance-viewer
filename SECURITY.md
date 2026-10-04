@@ -1,6 +1,6 @@
 # Security / 通信仕様
 
-このページは、VRChat Friends & Group Instance Viewer v1.4.29 の認証・通信仕様を確認しやすくするための補足資料です。
+このページは、VRChat Friends & Group Instance Viewer v1.5.2.1 の認証・通信仕様を確認しやすくするための補足資料です。
 
 ## VRChatログインセッション
 
@@ -42,14 +42,14 @@ APIリクエストは `background.js` と `session.js` の両方で `https://vrc
 
 ## 開発者サーバーへの送信
 
-v1.4.29には、開発者独自サーバーへフレンド情報、インスタンス情報、認証情報等を送信する処理はありません。
+v1.5.2.1には、開発者独自サーバーへフレンド情報、インスタンス情報、認証情報等を送信する処理はありません。
 
 Google Analytics、Sentry、広告SDK等の外部分析・テレメトリも使用していません。
 
 確認する場合は、主に以下のファイルをご覧ください。
 
 - `manifest.json` — 権限、Host permission、CSP
-- `background.js` — API URL制限、`credentials: 'include'`、Cookie/User-Agentヘッダー処理
+- `background.js` — API URL制限、`credentials: 'include'`、User-Agentヘッダー処理
 - `session.js` — VRChat API URLの検証とService Workerへの通信
 - `config.js` — API Base URL
 - `api.js` — VRChat APIエンドポイントとリクエスト処理
@@ -64,14 +64,15 @@ VRChat APIクライアントを識別できるよう、通常のChrome User-Agen
 
 ## 検証用ハッシュ
 
-GitHub Release [v1.4.29](https://github.com/mos-vrc/vrchat-friends-and-group-instance-viewer/releases/tag/v1.4.29)（2026年10月1日公開）に添付した配布ZIP:
+GitHub Release に添付した v1.5.2.1 配布ZIPの SHA-256:
 
-`vrchat_friends_and_group_instance_viewer_v1.4.29_release.zip`
-
-SHA-256（GitHub Release API の `assets[].digest` と、ダウンロードしたZIPから計算した値が一致）:
-
-`20cff2b5e25f20ab0c0ef9f801d8a211779ef7d21f0b04df558a83271f652d4c`
-
-このハッシュは、Release の Assets に添付された上記配布ZIPを対象とします。GitHubが自動生成する `Source code (zip)` / `Source code (tar.gz)` のハッシュではありません。
+`5f302b1c6ec8ace9522eae11a94ff2b36fa9d84f1334c9cd1e79a2acb27707e8`
 
 リポジトリ上の各拡張機能ファイルのSHA-256は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。
+
+
+## Favorite変更操作
+
+v1.5 では、ユーザーが明示的にFavoriteメニューを操作した場合に限り、VRChat APIの `POST /favorites` および `DELETE /favorites/{favoriteId}` を使用してFriend Favoriteを登録・移動・解除します。認証方式は他のAPI通信と同じで、Chromeの既存VRChatログインセッションを利用し、拡張機能JavaScriptからCookie値を読み取り・保存・手動送信しません。
+
+Favorite List移動のロールバックは、削除後の再登録そのものが失敗した場合だけ実行します。変更成功後のFavorite一覧再同期が失敗した場合は、成功済みの変更を取り消さずローカル状態へ反映し、次回更新時に再同期します。
