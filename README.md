@@ -2,7 +2,7 @@
 
 VRChatのオンラインフレンドと Friend / Group インスタンスを、Chrome上で見やすく一覧表示する Manifest V3 拡張機能です。
 
-**Current version: v1.5.3**
+**Current version: v1.5.3.1**
 
 - Chrome Web Store: https://chromewebstore.google.com/detail/vrchat-friends-group-inst/pncejiodjgmlklhgkpclcplgacbohbla
 - Releases: https://github.com/mos-vrc/vrchat-friends-and-group-instance-viewer/releases
@@ -13,13 +13,13 @@ VRChatのオンラインフレンドと Friend / Group インスタンスを、C
 
 ## ソースコードについて
 
-v1.5.3 の拡張機能本体ソースを公開用として管理しています。`manifest.json`、JavaScript、HTML、CSS、アイコンを確認できる構成です。
+v1.5.3.1 の拡張機能本体ソースを公開用として管理しています。`manifest.json`、JavaScript、HTML、CSS、アイコンを確認できる構成です。
 
 各ファイルの SHA-256 は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。
 
-GitHub Release で配布する v1.5.3 配布ZIPの SHA-256:
+GitHub Release で配布する v1.5.3.1 配布ZIPの SHA-256:
 
-`ecd9da4eb05c282bbf921e3b682ecf8fc402f268e44c0a5922431ace2de8bd7d`
+`39a7001db3bbba5f61e3488718abbfe45a28df6c3698a2835d44c1605da67e57`
 
 ## 主な機能
 

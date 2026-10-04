@@ -122,6 +122,7 @@ const state = {
     userId: '',
     anchor: null,
     busy: false,
+    fromFriendPreview: false,
   },
 };
 
@@ -1622,6 +1623,7 @@ function closeFavoriteMenu({ restoreFocus = false } = {}) {
   state.favoriteMenu.userId = '';
   state.favoriteMenu.anchor = null;
   state.favoriteMenu.busy = false;
+  state.favoriteMenu.fromFriendPreview = false;
   if (restoreFocus && anchor?.isConnected) anchor.focus();
 }
 
@@ -1659,7 +1661,19 @@ function renderFavoriteMenu(userId, anchor) {
   menu.classList.remove('hidden');
   state.favoriteMenu.userId = userId;
   state.favoriteMenu.anchor = anchor;
+  state.favoriteMenu.fromFriendPreview = Boolean(elements.friendInstancePreview?.contains(anchor));
+  if (state.favoriteMenu.fromFriendPreview) clearFriendPreviewTimer('close');
   requestAnimationFrame(() => positionFavoriteMenu(anchor));
+}
+
+function onFavoriteMenuMouseEnter() {
+  if (!state.favoriteMenu.fromFriendPreview) return;
+  clearFriendPreviewTimer('close');
+}
+
+function onFavoriteMenuMouseLeave() {
+  if (!state.favoriteMenu.fromFriendPreview) return;
+  hideFriendInstancePreview();
 }
 
 async function applyFavoriteMutation({ userId, groupName = '', remove = false } = {}) {
@@ -1766,7 +1780,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   renderFriendSidebar();
 
   const manifest = globalThis.chrome?.runtime?.getManifest?.();
-  const appVersion = manifest?.version_name || manifest?.version || '1.5.3';
+  const appVersion = manifest?.version_name || manifest?.version || '1.5.3.1';
   const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
   if (state.viewMode === VIEW_MODES.FRIENDS) {
     elements.list.innerHTML = `${renderFriendLocationView()}${credit}`;
@@ -2271,6 +2285,8 @@ elements.list?.addEventListener('scroll', () => hideFriendInstancePreview({ imme
 elements.friendInstancePreview?.addEventListener('mouseenter', () => clearFriendPreviewTimer('close'));
 elements.friendInstancePreview?.addEventListener('mouseleave', () => hideFriendInstancePreview());
 elements.friendInstancePreview?.addEventListener('click', onInviteMeClick);
+elements.favoriteMenu?.addEventListener('mouseenter', onFavoriteMenuMouseEnter);
+elements.favoriteMenu?.addEventListener('mouseleave', onFavoriteMenuMouseLeave);
 window.addEventListener('resize', () => {
   hideFriendInstancePreview({ immediate: true });
   closeFavoriteMenu();
