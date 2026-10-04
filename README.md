@@ -17,7 +17,7 @@ v1.5.3 の拡張機能本体ソースを公開用として管理しています�
 
 各ファイルの SHA-256 は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。
 
-GitHub Release に添付した v1.5.3 配布ZIPの SHA-256:
+GitHub Release で配布する v1.5.3 配布ZIPの SHA-256:
 
 `ecd9da4eb05c282bbf921e3b682ecf8fc402f268e44c0a5922431ace2de8bd7d`
 
