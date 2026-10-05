@@ -55,6 +55,20 @@ export function safeImageUrl(rawUrl) {
   }
 }
 
+// Resize only recognized, unsigned VRChat image endpoints. Preserve all other
+// URLs exactly, including signed URLs and local screenshot assets.
+export function sizedImageUrl(rawUrl, requestedSize = 256) {
+  const safe = safeImageUrl(rawUrl);
+  if (!safe) return '';
+  const url = new URL(safe);
+  if (!['vrchat.com', 'api.vrchat.cloud'].includes(url.hostname)
+    || url.search || url.hash || url.username || url.password) return safe;
+  const match = url.pathname.match(/^\/api\/1\/(?:image|file)\/(file_[0-9a-f-]+)\/(\d+)\/(?:file|\d+)$/i);
+  if (!match) return safe;
+  const size = [128, 256, 512].find(value => value >= requestedSize) || 512;
+  return `https://vrchat.com/api/1/image/${match[1]}/${match[2]}/${size}`;
+}
+
 export function parseLocation(location) {
   if (!location || typeof location !== 'string') return null;
   if (location === 'private') return { worldId: 'private', instanceId: 'private' };

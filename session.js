@@ -1,3 +1,4 @@
+import { isAllowedApiUrl } from './request-policy.js';
 /**
  * Access VRChat through the browser's existing vrchat.com login session without
  * reading the auth cookie value in extension JavaScript.
@@ -18,7 +19,7 @@ export class SessionError extends Error {
 }
 
 function assertVrchatApiUrl(url) {
-  if (!/^https:\/\/vrchat\.com\/api\/1\//i.test(url)) {
+  if (!isAllowedApiUrl(url)) {
     throw new SessionError('INVALID_URL', 'Only VRChat API URLs are allowed.');
   }
 }
@@ -71,6 +72,10 @@ export async function fetchUsingVrchatSession(url, options = {}) {
         'retry-after': typeof response.retryAfter === 'string' ? response.retryAfter : '',
       },
       text: typeof response.text === 'string' ? response.text : '',
+      deferred: response.deferred === true,
+      retryAt: Number(response.retryAt) || 0,
+      code: response.code || '',
+      outcomeUnknown: response.outcomeUnknown === true,
     };
   } catch (error) {
     if (error instanceof SessionError) throw error;

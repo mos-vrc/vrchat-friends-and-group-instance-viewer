@@ -1,3 +1,5 @@
+import { patchElement, patchMarkup } from './dom.js';
+import { ImagePool, ImageController } from './images.js';
 import { CONFIG, PERMISSIONS, SORTS, TABS } from './config.js';
 import { JsonStorage } from './storage.js';
 import { DataRepository, VrchatApiClient } from './api.js';
@@ -29,6 +31,7 @@ import {
   uniqueUsers,
   shouldFetchNonFriendOwner,
   safeImageUrl,
+  sizedImageUrl,
 } from './domain.js';
 
 const elements = {
@@ -51,13 +54,15 @@ const elements = {
   friendSort: document.getElementById('friendSort'),
   instanceDisplay: document.getElementById('instanceDisplay'),
   autoRefresh: document.getElementById('autoRefresh'),
+  reloadButton: document.getElementById('reloadButton'),
+  clearCacheButton: document.getElementById('clearCacheButton'),
   actionToast: document.getElementById('actionToast'),
   friendInstancePreview: document.getElementById('friendInstancePreview'),
   favoriteMenu: document.getElementById('favoriteMenu'),
 };
 
 const uiStorage = new JsonStorage();
-const repository = new DataRepository(new VrchatApiClient(), uiStorage);
+let repository = new DataRepository(new VrchatApiClient(), uiStorage);
 
 const VIEW_MODES = Object.freeze({
   INSTANCES: 'instances',
@@ -88,7 +93,6 @@ const state = {
   autoRefreshMinutes: 0,
   autoRefreshTimer: null,
   sidebarMode: 'normal',
-  statusTimer: null,
   toastTimer: null,
   user: null,
   favorites: new Set(),
@@ -99,6 +103,10 @@ const state = {
   friendIndex: new Map(),
   instances: [],
   loading: false,
+  loadGeneration: 0,
+  autoRefreshDueAt: 0,
+  favoriteMutationPending: false,
+  pendingInvites: new Set(),
   highlight: {
     location: '',
     until: 0,
@@ -108,6 +116,7 @@ const state = {
   dataFromCache: false,
   lastLoadedAt: 0,
   collapsedFriendGroups: new Set(['ungrouped']),
+  privateCollapsed: true,
   friendPreview: {
     openTimer: null,
     closeTimer: null,
@@ -305,18 +314,25 @@ function clearAutoRefreshTimer() {
   state.autoRefreshTimer = null;
 }
 
-function scheduleAutoRefresh() {
+function scheduleAutoRefresh({ preserveDue = false } = {}) {
   clearAutoRefreshTimer();
-  if (![10, 30].includes(state.autoRefreshMinutes)) return;
-  const delayMs = state.autoRefreshMinutes * 60 * 1000;
+  if (![10, 30].includes(state.autoRefreshMinutes)) { state.autoRefreshDueAt = 0; return; }
+  if (!preserveDue || !state.autoRefreshDueAt) state.autoRefreshDueAt = Date.now() + state.autoRefreshMinutes * 60000;
+  if (document.hidden) return;
+  const delayMs = Math.max(0, state.autoRefreshDueAt - Date.now());
   state.autoRefreshTimer = setTimeout(async () => {
     state.autoRefreshTimer = null;
-    if (state.loading) {
-      scheduleAutoRefresh();
+    if (document.hidden) return;
+    if (state.loading || state.favoriteMutationPending || state.pendingInvites.size) {
+      state.autoRefreshDueAt = Date.now() + 1000;
+      scheduleAutoRefresh({ preserveDue: true });
       return;
     }
-    await load();
-    scheduleAutoRefresh();
+    // Anchor the next deadline to this start, not the fetch completion.
+    state.autoRefreshDueAt = Date.now() + state.autoRefreshMinutes * 60000;
+    await load({ reason: 'automatic' });
+    // Preserve any deadline selected while loading (interval/visibility changes).
+    scheduleAutoRefresh({ preserveDue: true });
   }, delayMs);
 }
 
@@ -378,28 +394,12 @@ function getVisibleInstances() {
   return filterAndSortInstances(state.instances, state, friendMap());
 }
 
-function clearStatusTimer() {
-  if (!state.statusTimer) return;
-  clearTimeout(state.statusTimer);
-  state.statusTimer = null;
-}
-
 function setStatus(message, error = false) {
   if (!elements.status) return;
-  clearStatusTimer();
   const text = String(message || '').trim();
   elements.status.textContent = text;
   elements.status.classList.toggle('error', Boolean(error));
   elements.statusRow?.classList.toggle('hidden', !text);
-}
-
-function setTransientStatus(message, { error = false, delay = 2800 } = {}) {
-  setStatus(message, error);
-  if (!message || error) return;
-  state.statusTimer = setTimeout(() => {
-    state.statusTimer = null;
-    if (elements.status?.textContent === message) setStatus('');
-  }, delay);
 }
 
 function clearActionToastTimer() {
@@ -579,8 +579,23 @@ function getFriendSidebarRows() {
   return filtered.sort(compareFriendNames);
 }
 
+const imageFallbacks = new Map();
+function displayImageUrl(rawUrl, kind = 'avatar') {
+  const original = safeImageUrl(rawUrl);
+  const sized = sizedImageUrl(original, kind === 'world' ? CONFIG.WORLD_IMAGE_SIZE : CONFIG.USER_IMAGE_SIZE);
+  if (sized !== original) {
+    if (imageFallbacks.size >= 2000) imageFallbacks.delete(imageFallbacks.keys().next().value);
+    imageFallbacks.set(sized, original);
+  }
+  return sized;
+}
+
+const imagePool = new ImagePool({ fallbackFor: url => imageFallbacks.get(url) || '', concurrency: CONFIG.IMAGE_CONCURRENCY,
+  timeoutMs: CONFIG.IMAGE_TIMEOUT_MS, minIntervalMs: CONFIG.IMAGE_MIN_INTERVAL_MS });
+const imageController = new ImageController(imagePool);
+
 function friendAvatarUrl(friend) {
-  return safeImageUrl(
+  return displayImageUrl(
     friend.profilePicOverride
       || friend.currentAvatarThumbnailImageUrl
       || friend.userIcon
@@ -611,10 +626,10 @@ function renderFriendSidebarLocationThumbnail(friend) {
   }
 
   const thumb = entry && !isPrivate && !isWebsite
-    ? safeImageUrl(entry.world?.thumbnailImageUrl || entry.instanceData?.world?.thumbnailImageUrl || entry.instanceData?.world?.imageUrl || '')
+    ? displayImageUrl(entry.world?.thumbnailImageUrl || entry.instanceData?.world?.thumbnailImageUrl || entry.instanceData?.world?.imageUrl || '', 'world')
     : '';
   const thumbContent = thumb
-    ? `<img class="friend-sidebar-location-thumb-image" src="${escapeHtml(thumb)}" loading="lazy" decoding="async" alt="">`
+    ? `<img class="friend-sidebar-location-thumb-image" data-image-src="${escapeHtml(thumb)}" loading="lazy" decoding="async" alt="">`
     : `<div class="friend-sidebar-location-thumb-placeholder friend-location-thumb-placeholder">${renderFriendLocationPlaceholderIcon({ isPrivate, isWebsite })}</div>`;
   const statusText = isWebsite
     ? 'Other Platform'
@@ -643,7 +658,7 @@ function renderFriendSidebarItem(friend) {
   const isPrivate = permission === PERMISSIONS.PRIVATE || location === 'private';
   const avatarUrl = friendAvatarUrl(friend);
   const avatar = avatarUrl
-    ? `<img class="friend-avatar" src="${escapeHtml(avatarUrl)}" alt="">`
+    ? `<img class="friend-avatar" data-image-src="${escapeHtml(avatarUrl)}" loading="lazy" decoding="async" alt="">`
     : '<div class="friend-avatar"></div>';
   const showLocation = state.sidebarMode === 'location';
   const locationData = !isWebsite && !isPrivate && location && location !== 'offline'
@@ -678,7 +693,7 @@ function disconnectSidebarHydrationObserver() {
 
 function syncSidebarHydration() {
   disconnectSidebarHydrationObserver();
-  if (state.sidebarMode !== 'location' || !elements.friendList) return;
+  if (document.hidden || state.sidebarMode !== 'location' || !elements.friendList) return;
 
   const cards = [...elements.friendList.querySelectorAll('.friend-item[data-location]')];
   if (!cards.length) return;
@@ -717,8 +732,11 @@ function syncSidebarHydration() {
   });
 }
 
+let sidebarSyncPending = false;
 function scheduleSidebarHydrationSync() {
-  queueMicrotask(() => syncSidebarHydration());
+  if (sidebarSyncPending) return;
+  sidebarSyncPending = true;
+  queueMicrotask(() => { sidebarSyncPending = false; syncSidebarHydration(); });
 }
 
 function renderFriendSidebar() {
@@ -734,7 +752,8 @@ function renderFriendSidebar() {
     'aria-label',
     `表示中 ${visibleCount}人 / オンラインフレンド総数 ${onlineFriendCount}人`,
   );
-  elements.friendList.innerHTML = rows.map(renderFriendSidebarItem).join('');
+  patchMarkup(elements.friendList, rows.map(renderFriendSidebarItem).join(''));
+  if (state.friendPreview.anchor?.classList.contains('friend-item')) validateFriendInstancePreview();
   elements.friendList.scrollTop = previousScroll;
   scheduleSidebarHydrationSync();
 }
@@ -752,7 +771,7 @@ function replaceSidebarLocationCardsInDom(entry) {
     const template = document.createElement('template');
     template.innerHTML = renderFriendSidebarItem(friend).trim();
     const replacement = template.content.firstElementChild;
-    if (replacement) node.replaceWith(replacement);
+    if (replacement) patchElement(node, replacement);
   });
   elements.friendList.scrollTop = scrollTop;
   scheduleSidebarHydrationSync();
@@ -880,7 +899,7 @@ function renderFriendLocationItem(friend) {
   const isPrivate = permission === PERMISSIONS.PRIVATE || location === 'private';
   const avatarUrl = friendAvatarUrl(friend);
   const avatar = avatarUrl
-    ? `<img class="friend-location-avatar" src="${escapeHtml(avatarUrl)}" loading="lazy" alt="${escapeHtml(name)}">`
+    ? `<img class="friend-location-avatar" data-image-src="${escapeHtml(avatarUrl)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
     : '<div class="friend-location-avatar friend-location-avatar-empty"></div>';
   const profileUrl = CONFIG.DEBUG_MODE ? '' : buildUserProfileUrl(friend.id);
   const avatarContent = profileUrl
@@ -904,10 +923,10 @@ function renderFriendLocationItem(friend) {
   }
 
   const thumb = entry && !isPrivate && !isWebsite
-    ? safeImageUrl(entry.world?.thumbnailImageUrl || entry.instanceData?.world?.thumbnailImageUrl || entry.instanceData?.world?.imageUrl || '')
+    ? displayImageUrl(entry.world?.thumbnailImageUrl || entry.instanceData?.world?.thumbnailImageUrl || entry.instanceData?.world?.imageUrl || '', 'world')
     : '';
   const thumbContent = thumb
-    ? `<img class="friend-location-thumb" src="${escapeHtml(thumb)}" loading="lazy" decoding="async" alt="">`
+    ? `<img class="friend-location-thumb" data-image-src="${escapeHtml(thumb)}" loading="lazy" decoding="async" alt="">`
     : `<div class="friend-location-thumb friend-location-thumb-placeholder">${renderFriendLocationPlaceholderIcon({ isPrivate, isWebsite })}</div>`;
   const simpleStatusText = isWebsite
     ? 'Other Platform'
@@ -1039,7 +1058,7 @@ function renderParticipantList(entry, { showAll = false } = {}) {
   const ownerId = instanceOwnerId(entry);
   return `<div class="participant-list">${participants.map((user) => {
     const name = user.displayName || user.username || user.id;
-    const src = safeImageUrl(
+    const src = displayImageUrl(
       user.profilePicOverride
         || user.currentAvatarThumbnailImageUrl
         || user.userIcon
@@ -1049,7 +1068,7 @@ function renderParticipantList(entry, { showAll = false } = {}) {
     );
     const profileUrl = buildUserProfileUrl(user.id);
     const avatar = src
-      ? `<img class="participant-avatar" src="${escapeHtml(src)}" loading="lazy" alt="${escapeHtml(name)}">`
+      ? `<img class="participant-avatar" data-image-src="${escapeHtml(src)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
       : '<div class="participant-avatar participant-avatar-empty"></div>';
     const avatarLink = profileUrl
       ? `<a class="participant-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${avatar}</a>`
@@ -1084,7 +1103,10 @@ function renderPrivateInstance(entry, { showAll = false } = {}) {
       ? entry.friends.filter((friend) => state.favorites.has(friend.id))
       : entry.friends;
 
-  return `
+  const collapsible = !showAll && state.viewMode !== VIEW_MODES.FRIENDS && state.tab === TABS.ALL;
+  const header = collapsible ? `<button type="button" class="friend-location-section-header" data-private-toggle="true" aria-expanded="${!state.privateCollapsed}" aria-controls="privateInstanceUsers"><span class="friend-location-section-chevron" aria-hidden="true">${state.privateCollapsed ? '▶' : '▼'}</span><span class="friend-location-section-title">Private</span><span class="friend-location-section-count">${visibleFriends.length}人</span></button>` : '';
+  if (collapsible && state.privateCollapsed) return `<section class="friend-location-section private-instance-section is-collapsed" data-location="${escapeHtml(entry.location)}">${header}</section>`;
+  const body = `
     <article class="private-card${instanceIsHighlighted(entry) ? ' instance-highlight' : ''}" data-location="${escapeHtml(entry.location)}" aria-label="Private">
       <div class="private-label">Private</div>
       <div class="private-users">
@@ -1093,7 +1115,7 @@ function renderPrivateInstance(entry, { showAll = false } = {}) {
           const src = friendAvatarUrl(friend);
           const profileUrl = CONFIG.DEBUG_MODE ? '' : buildUserProfileUrl(friend.id);
           const privateAvatar = src
-            ? `<img class="private-avatar" src="${escapeHtml(src)}" loading="lazy" alt="${escapeHtml(name)}">`
+            ? `<img class="private-avatar" data-image-src="${escapeHtml(src)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
             : `<div class="private-avatar private-avatar-empty" aria-label="${escapeHtml(name)}"></div>`;
           const privateAvatarLink = profileUrl
             ? `<a class="private-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${privateAvatar}</a>`
@@ -1110,6 +1132,7 @@ function renderPrivateInstance(entry, { showAll = false } = {}) {
         ${visibleFriends.length === 0 ? `<div class="private-empty">${favoriteMode ? 'Favoriteフレンドはいません' : '表示対象のユーザーはいません'}</div>` : ''}
       </div>
     </article>`;
+  return collapsible ? `<section class="friend-location-section private-instance-section" data-location="${escapeHtml(entry.location)}">${header}<div id="privateInstanceUsers">${body}</div></section>` : body;
 }
 
 function renderInstanceCard(entry, { preview = false } = {}) {
@@ -1119,10 +1142,11 @@ function renderInstanceCard(entry, { preview = false } = {}) {
     || entry.instanceData?.world?.name
     || entry.worldId
     || 'World information unavailable';
-  const thumb = safeImageUrl(
+  const thumb = displayImageUrl(
     entry.world?.thumbnailImageUrl
       || entry.instanceData?.world?.thumbnailImageUrl
       || '',
+    'world',
   );
   const worldUrl = entry.debug ? '' : buildWorldUrl(entry);
   const launchUrl = entry.debug ? '' : buildInstanceLaunchUrl(entry);
@@ -1150,7 +1174,7 @@ function renderInstanceCard(entry, { preview = false } = {}) {
     <article class="card${hydrated ? '' : ' card-loading'}${instanceIsHighlighted(entry) ? ' instance-highlight' : ''}" data-location="${escapeHtml(entry.location)}">
       ${worldUrl ? `<a class="thumb-wrap thumb-clickable" href="${escapeHtml(worldUrl)}" target="_blank" rel="noopener noreferrer" title="ワールドページを開く">` : '<div class="thumb-wrap">'}
         ${thumb
-          ? `<img class="thumb" src="${escapeHtml(thumb)}" loading="eager" decoding="async" alt="">`
+          ? `<img class="thumb" data-image-src="${escapeHtml(thumb)}" loading="eager" decoding="async" alt="">`
           : '<div class="thumb thumb-placeholder"></div>'}
         <div class="thumb-fade"></div>
         <div class="badges">
@@ -1162,7 +1186,7 @@ function renderInstanceCard(entry, { preview = false } = {}) {
         </div>
         <div class="overlay-title" title="${escapeHtml(worldName)}">${escapeHtml(worldName)}</div>
       ${worldUrl ? '</a>' : '</div>'}
-      <button class="invite-me-button invite-me-button-simple" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInvite Meを送信" ${entry.debug || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>Invite Me</button>
+      <button class="invite-me-button invite-me-button-simple" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInvite Meを送信" ${entry.debug || state.pendingInvites.has(entry.location) || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>Invite Me</button>
 
       <div class="info-panel">
         <div class="instance-title-line">
@@ -1178,7 +1202,7 @@ function renderInstanceCard(entry, { preview = false } = {}) {
             <path d="M2.8 10h14.4M10 2.5c2.1 2 3.2 4.5 3.2 7.5S12.1 15.5 10 17.5M10 2.5C7.9 4.5 6.8 7 6.8 10s1.1 5.5 3.2 7.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg><span class="summary-value">${escapeHtml(permissionLabel(entry.permission))}${entry.region ? ` / ${escapeHtml(regionLabel(entry.region))}` : ''}</span></div>
           <div class="summary-item">${renderSummaryPeopleIcon('world')}<span class="summary-value">${escapeHtml(userCountText)}</span></div>
-          <div class="summary-item friend-count-summary">${renderSummaryPeopleIcon('friends')}<span class="summary-value">${escapeHtml(String(friendCount))}</span><button class="invite-me-button invite-me-button-normal" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInvite Meを送信" ${entry.debug || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>Invite Me</button></div>
+          <div class="summary-item friend-count-summary">${renderSummaryPeopleIcon('friends')}<span class="summary-value">${escapeHtml(String(friendCount))}</span><button class="invite-me-button invite-me-button-normal" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInvite Meを送信" ${entry.debug || state.pendingInvites.has(entry.location) || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>Invite Me</button></div>
         </div>
 
         ${renderParticipantList(entry, { showAll: preview })}
@@ -1201,13 +1225,16 @@ async function onInviteMeClick(event) {
     showActionToast('DEBUG MODE: ダミーインスタンスにはInvite Meを送信しません。', { delay: 2600 });
     return;
   }
-  if (button.disabled) return;
+  if (button.disabled || state.loading || state.pendingInvites.has(location)) return;
 
+  const generation = state.loadGeneration;
+  state.pendingInvites.add(location);
   button.disabled = true;
   button.classList.add('is-loading');
   button.textContent = '送信中…';
   try {
     await repository.inviteMyselfTo(location);
+    if (generation !== state.loadGeneration) return;
     button.textContent = 'Invited';
     button.classList.add('is-success');
     showActionToast('Invite Meを送信しました', { delay: 2200 });
@@ -1218,6 +1245,8 @@ async function onInviteMeClick(event) {
       button.disabled = false;
     }, 1800);
   } catch (error) {
+    if (generation !== state.loadGeneration || error?.name === 'AbortError') return;
+    if (error?.status === 401) handleSessionExpired();
     console.warn('Could not send Invite Me:', location, error);
     button.textContent = 'Invite Me';
     button.classList.remove('is-loading');
@@ -1226,8 +1255,17 @@ async function onInviteMeClick(event) {
       ? 'VRChatのログインセッションが無効です。'
       : error?.status === 404
         ? 'このインスタンスは存在しないか、Invite Meを送信できません。'
-        : `Invite Meの送信に失敗しました${error?.status ? ` (${error.status})` : ''}`;
+        : error?.outcomeUnknown ? '送信結果を確認できませんでした。VRChat側の通知を確認してください。'
+      : `Invite Meの送信に失敗しました${error?.status ? ` (${error.status})` : ''}`;
     showActionToast(message, { error: true, delay: 5600 });
+  } finally {
+    state.pendingInvites.delete(location);
+    document.querySelectorAll('.invite-me-button').forEach(other => {
+      if (other.dataset.location !== location) return;
+      other.disabled = false;
+      other.classList.remove('is-loading');
+      if (other !== button) other.textContent = 'Invite Me';
+    });
   }
 }
 
@@ -1236,7 +1274,7 @@ function getCurrentInstanceEntry(location, fallback = null) {
 }
 
 function needsHydration(entry) {
-  if (!entry || entry.debug || entry.permission === PERMISSIONS.PRIVATE) return false;
+  if (state.loading || !entry || entry.debug || entry.permission === PERMISSIONS.PRIVATE) return false;
 
   // A failed Instance request must become a terminal state for the current
   // render. Without this guard, `!entry.instanceData` remained true after a
@@ -1285,8 +1323,8 @@ function replaceCardInDom(entry) {
       template.innerHTML = renderFriendLocationItem(friend).trim();
       const replacement = template.content.firstElementChild;
       if (!replacement) return;
-      node.replaceWith(replacement);
-      if (needsHydration(currentEntry)) hydrationController.observeNode(replacement);
+      patchElement(node, replacement);
+      if (needsHydration(currentEntry)) hydrationController.observeNode(node);
     });
     elements.list.scrollTop = scrollTop;
     return;
@@ -1302,9 +1340,9 @@ function replaceCardInDom(entry) {
   const replacement = template.content.firstElementChild;
   if (!replacement) return;
   const scrollTop = elements.list.scrollTop;
-  node.replaceWith(replacement);
+  patchElement(node, replacement);
   elements.list.scrollTop = scrollTop;
-  if (needsHydration(currentEntry)) hydrationController.observeNode(replacement);
+  if (needsHydration(currentEntry)) hydrationController.observeNode(node);
 
   // Re-center the focused card after asynchronous hydration replaced its DOM
   // node. This neutralizes layout shifts caused by the completed request.
@@ -1315,6 +1353,9 @@ function replaceCardInDom(entry) {
 
 async function hydrateInstance(location, fallbackEntry) {
   if (!location) return;
+  const dataRepository = repository;
+  const generation = state.loadGeneration;
+  const current = () => generation === state.loadGeneration && !dataRepository.disposed;
   let currentEntry = getCurrentInstanceEntry(location, fallbackEntry);
   if (!currentEntry || currentEntry.permission === PERMISSIONS.PRIVATE) return;
 
@@ -1322,8 +1363,11 @@ async function hydrateInstance(location, fallbackEntry) {
     let data = currentEntry.instanceData;
     if (!data) {
       try {
-        data = await repository.fetchInstance(location);
+        data = await dataRepository.fetchInstance(location);
+        if (!current()) return;
       } catch (error) {
+        if (!current() || error?.name === 'AbortError') return;
+        if (error?.status === 401) { handleSessionExpired(); return; }
         currentEntry = getCurrentInstanceEntry(location, currentEntry);
         currentEntry.instanceFetchFailed = true;
         currentEntry.foafChecked = true;
@@ -1344,7 +1388,8 @@ async function hydrateInstance(location, fallbackEntry) {
     if (!currentEntry.world && !currentEntry.worldFetchFailed
       && currentEntry.worldId && currentEntry.worldId !== 'offline' && currentEntry.worldId !== 'private') {
       try {
-        const world = await repository.fetchWorld(currentEntry.worldId);
+        const world = await dataRepository.fetchWorld(currentEntry.worldId);
+        if (!current()) return;
         currentEntry = getCurrentInstanceEntry(location, currentEntry);
         if (world) {
           currentEntry.world = world;
@@ -1352,7 +1397,9 @@ async function hydrateInstance(location, fallbackEntry) {
         } else {
           currentEntry.worldFetchFailed = true;
         }
-      } catch {
+      } catch (error) {
+        if (!current() || error?.name === 'AbortError') return;
+        if (error?.status === 401) { handleSessionExpired(); return; }
         currentEntry = getCurrentInstanceEntry(location, currentEntry);
         currentEntry.worldFetchFailed = true;
       }
@@ -1361,7 +1408,8 @@ async function hydrateInstance(location, fallbackEntry) {
     if (needsNonFriendOwnerProfile(currentEntry, friendMap())
       || shouldFetchNonFriendOwner(currentEntry, state, friendMap())) {
       const ownerId = instanceOwnerId(currentEntry);
-      const ownerUser = await repository.fetchUser(ownerId);
+      const ownerUser = await dataRepository.fetchUser(ownerId);
+      if (!current()) return;
       currentEntry = getCurrentInstanceEntry(location, currentEntry);
       currentEntry.ownerUserLoaded = true;
       if (ownerUser) currentEntry.ownerUser = ownerUser;
@@ -1369,6 +1417,8 @@ async function hydrateInstance(location, fallbackEntry) {
 
     replaceCardInDom(currentEntry);
   } catch (error) {
+    if (!current() || error?.name === 'AbortError') return;
+    if (error?.status === 401) { handleSessionExpired(); return; }
     console.warn('Could not hydrate instance:', location, error);
   }
 }
@@ -1453,13 +1503,14 @@ function renderFriendInstancePreview(entry) {
   const gridWidth = (columns * avatarSize) + ((columns - 1) * 4);
   preview.style.setProperty('--friend-preview-columns', String(columns));
   preview.style.setProperty('--friend-preview-grid-width', `${gridWidth}px`);
-  preview.innerHTML = renderInstanceCard(entry, { preview: true });
+  patchMarkup(preview, renderInstanceCard(entry, { preview: true }));
   preview.classList.remove('hidden');
   requestAnimationFrame(positionFriendInstancePreview);
 }
 
 function refreshFriendInstancePreview(location) {
   if (!location || state.friendPreview.location !== location) return;
+  if (!validateFriendInstancePreview()) return;
   const entry = getCurrentInstanceEntry(location);
   if (!entry || !elements.friendInstancePreview || elements.friendInstancePreview.classList.contains('hidden')) return;
   renderFriendInstancePreview(entry);
@@ -1476,34 +1527,49 @@ function isValidFriendPreviewAnchor(item) {
   return false;
 }
 
+function friendPreviewEntry(item) {
+  if (!isValidFriendPreviewAnchor(item)) return null;
+  const friend = state.friendIndex.get(item.dataset.friendId);
+  if (!friend || onlineStatusInfo(friend).className === 'online-website') return null;
+  const location = resolveFriendLocation(friend);
+  if (classifyPermission(location) === PERMISSIONS.PRIVATE || location === 'private') return null;
+  return reverseEntryForFriend(friend);
+}
+
+function validateFriendInstancePreview() {
+  const entry = friendPreviewEntry(state.friendPreview.anchor);
+  if (!entry || entry.location !== state.friendPreview.location) {
+    hideFriendInstancePreview({ immediate: true });
+    return false;
+  }
+  return true;
+}
+
 function scheduleFriendInstancePreview(item, pointerX, pointerY) {
-  if (!isValidFriendPreviewAnchor(item)) return;
+  if (!isValidFriendPreviewAnchor(item)) { hideFriendInstancePreview({ immediate: true }); return; }
   if (
     item.classList.contains('friend-item')
     && state.friendPreview.sidebarSuppressedFriendId
     && item.dataset.friendId === state.friendPreview.sidebarSuppressedFriendId
-  ) return;
+  ) { hideFriendInstancePreview({ immediate: true }); return; }
   if (elements.favoriteMenu && !elements.favoriteMenu.classList.contains('hidden')) return;
+  const entry = friendPreviewEntry(item);
+  // Ineligible rows must close the old preview rather than cancel its close timer.
+  if (!entry) { hideFriendInstancePreview({ immediate: true }); return; }
   clearFriendPreviewTimer('open');
   clearFriendPreviewTimer('close');
 
   const friend = state.friendIndex.get(item.dataset.friendId);
-  if (!friend) return;
-  const status = onlineStatusInfo(friend);
-  const location = resolveFriendLocation(friend);
-  const permission = classifyPermission(location);
-  if (status.className === 'online-website' || permission === PERMISSIONS.PRIVATE || location === 'private') return;
-
-  const entry = reverseEntryForFriend(friend);
-  if (!entry) return;
   state.friendPreview.pointerX = Number(pointerX) || 0;
   state.friendPreview.pointerY = Number(pointerY) || 0;
 
   state.friendPreview.openTimer = window.setTimeout(() => {
     state.friendPreview.openTimer = null;
-    if (!isValidFriendPreviewAnchor(item)) return;
-
-    const currentEntry = getCurrentInstanceEntry(entry.location, entry);
+    const currentEntry = friendPreviewEntry(item);
+    if (!currentEntry || currentEntry.location !== entry.location) {
+      hideFriendInstancePreview({ immediate: true });
+      return;
+    }
     state.friendPreview.friendId = friend.id;
     state.friendPreview.location = currentEntry.location;
     state.friendPreview.anchor = item;
@@ -1604,6 +1670,11 @@ function toggleFriendLocationGroup(groupId) {
 }
 
 function onFriendViewControlClick(event) {
+  const privateToggle = event.target.closest('[data-private-toggle]');
+  if (privateToggle && elements.list?.contains(privateToggle)) {
+    event.preventDefault(); state.privateCollapsed = !state.privateCollapsed;
+    render({ resetScroll: false }); return;
+  }
   const toggle = event.target.closest('[data-friend-group-toggle]');
   if (!toggle || !elements.list?.contains(toggle)) return;
   event.preventDefault();
@@ -1677,7 +1748,7 @@ function onFavoriteMenuMouseLeave() {
 }
 
 async function applyFavoriteMutation({ userId, groupName = '', remove = false } = {}) {
-  if (!userId || state.favoriteMenu.busy) return;
+  if (!userId || state.favoriteMutationPending || state.loading) return;
   if (CONFIG.DEBUG_MODE) {
     showActionToast('DEBUG MODE: Favorite情報はVRChatへ変更しません。', { delay: 2600 });
     closeFavoriteMenu();
@@ -1690,23 +1761,30 @@ async function applyFavoriteMutation({ userId, groupName = '', remove = false } 
     return;
   }
 
+  state.favoriteMutationPending = true;
   state.favoriteMenu.busy = true;
+  const generation = state.loadGeneration;
+  const dataRepository = repository;
   elements.favoriteMenu?.querySelectorAll('button').forEach((button) => { button.disabled = true; });
   showActionToast(remove ? 'Favoriteを外しています…' : 'Favoriteを更新中…', { delay: 0 });
   try {
     const result = remove
-      ? await repository.removeFriendFavorite(currentRecord)
-      : await repository.setFriendFavoriteGroup(userId, groupName, currentRecord);
+      ? await dataRepository.removeFriendFavorite(currentRecord)
+      : await dataRepository.setFriendFavoriteGroup(userId, groupName, currentRecord);
+    if (generation !== state.loadGeneration) return;
     applyFavoriteState(result.favoriteState);
     closeFavoriteMenu();
     render({ resetScroll: false });
     if (result.syncFailed) {
+      if (result.syncError?.status === 401) handleSessionExpired();
       const action = remove ? 'Favoriteを外しました' : 'Favoriteを更新しました';
       showActionToast(`${action}（再同期に失敗しました。次回更新時に再確認します）`, { delay: 5200 });
     } else {
       showActionToast(remove ? 'Favoriteを外しました' : 'Favoriteを更新しました', { delay: 2200 });
     }
   } catch (error) {
+    if (generation !== state.loadGeneration || error?.name === 'AbortError') return;
+    if (error?.status === 401) handleSessionExpired();
     console.warn('Could not update Favorite:', userId, error);
     state.favoriteMenu.busy = false;
     elements.favoriteMenu?.querySelectorAll('button').forEach((button) => { button.disabled = false; });
@@ -1715,8 +1793,12 @@ async function applyFavoriteMutation({ userId, groupName = '', remove = false } 
       ? 'VRChatのログインセッションが無効です。'
       : error?.status === 403
         ? 'このフレンドのFavoriteを変更できません。'
-        : `Favoriteの更新に失敗しました${error?.status ? ` (${error.status})` : ''}${rollback}`;
+        : error?.favoriteOutcomeUnknown || error?.outcomeUnknown
+        ? '変更結果を確認できませんでした。更新してFavoriteの状態を確認してください。'
+      : `Favoriteの更新に失敗しました${error?.status ? ` (${error.status})` : ''}${rollback}`;
     showActionToast(message, { error: true, delay: 5600 });
+  } finally {
+    state.favoriteMutationPending = false;
   }
 }
 
@@ -1780,16 +1862,16 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   renderFriendSidebar();
 
   const manifest = globalThis.chrome?.runtime?.getManifest?.();
-  const appVersion = manifest?.version_name || manifest?.version || '1.5.3.1';
+  const appVersion = manifest?.version_name || manifest?.version || '1.5.4.5';
   const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
   if (state.viewMode === VIEW_MODES.FRIENDS) {
-    elements.list.innerHTML = `${renderFriendLocationView()}${credit}`;
+    patchMarkup(elements.list, `${renderFriendLocationView()}${credit}`);
   } else {
     const data = getVisibleInstances();
     if (!data.length) {
-      elements.list.innerHTML = `<div class="empty">表示できるインスタンスはありません。</div>${credit}`;
+      patchMarkup(elements.list, `<div class="empty">表示できるインスタンスはありません。</div>${credit}`);
     } else {
-      elements.list.innerHTML = `${data.map(renderInstanceCard).join('')}${credit}`;
+      patchMarkup(elements.list, `${data.map(renderInstanceCard).join('')}${credit}`);
     }
   }
 
@@ -1818,7 +1900,7 @@ function focusFriendInstance(friend) {
   clearInstanceHighlight();
   if (!targetEntry) {
     render({ resetScroll: false });
-    setTransientStatus(
+    showActionToast(
       targetTab === TABS.FAVORITE_PLUS
         ? 'このフレンドのインスタンスはFavorite+には表示されません'
         : 'このフレンドのインスタンスは「すべて」には表示されません',
@@ -1876,23 +1958,35 @@ function updateLoadedAtLabel() {
   elements.updatedAt.title = state.dataFromCache ? `${label}（一部キャッシュ）` : label;
 }
 
-async function refreshGroupDataInBackground(userId) {
+async function refreshGroupDataInBackground(userId, dataRepository, generation) {
+  const current = () => generation === state.loadGeneration && !dataRepository.disposed;
   try {
-    const groupInstances = await repository.fetchGroupInstances(userId);
+    const groupInstances = await dataRepository.fetchGroupInstances(userId);
+    if (!current()) return;
+    const previous = new Map(state.instances.map(entry => [entry.location, entry]));
     state.instances = buildLocations(
       createFriendLocationMap(state.friends),
       groupInstances,
       locationCacheReader,
     );
+    state.instances = state.instances.map(entry => {
+      const old = previous.get(entry.location);
+      if (!old) return entry;
+      if (old.instanceData) mergeInstanceData(entry, old.instanceData);
+      return { ...entry, world: old.world || entry.world,
+        ownerUser: old.ownerUser, ownerUserLoaded: old.ownerUserLoaded,
+        instanceFetchFailed: old.instanceFetchFailed, worldFetchFailed: old.worldFetchFailed,
+        foafChecked: old.foafChecked, groupName: old.groupName || entry.groupName };
+    });
     const focusRemaining = Math.max(0, state.highlight.until - Date.now());
     if (state.highlight.location && focusRemaining > 0) {
       setTimeout(() => {
-        if (state.highlight.location) render();
+        if (current() && state.highlight.location) render();
       }, focusRemaining + 16);
     } else {
       render();
     }
-    state.dataFromCache = Boolean(repository.usedStaleFallback);
+    state.dataFromCache = Boolean(dataRepository.usedStaleFallback);
     updateLoadedAtLabel();
 
     const missingGroupIds = [...new Set(
@@ -1906,7 +2000,9 @@ async function refreshGroupDataInBackground(userId) {
     await mapWithConcurrency(
       missingGroupIds,
       async (groupId) => {
-        const group = await repository.fetchGroup(groupId);
+        if (!current()) return;
+        const group = await dataRepository.fetchGroup(groupId);
+        if (!current()) return;
         const id = group?.groupId || group?.id;
         const name = group?.name || group?.shortCode || '';
         if (!id || !name) return;
@@ -1924,6 +2020,7 @@ async function refreshGroupDataInBackground(userId) {
       CONFIG.GROUP_LOOKUP_CONCURRENCY,
     );
   } catch (error) {
+    if (!current() || error?.name === 'AbortError') return;
     if (error?.status === 401) throw error;
     console.warn('Could not refresh group instances:', error);
   }
@@ -2045,33 +2142,83 @@ function loadDebugData() {
   setStatus(`DEBUG MODE: 各${Math.max(1, Math.floor(Number(CONFIG.DEBUG_FRIEND_COUNT) || 20))}人・Favorite ${CONFIG.DEBUG_FAVORITE_COUNT}人 / 3インスタンス（Public・Group・Private）`);
 }
 
-async function load() {
+function clearDisplayedData() {
+  state.privateCollapsed = true;
+  hideFriendInstancePreview({ immediate: true });
+  closeFavoriteMenu();
+  clearInstanceHighlight();
+  hydrationController.reset();
+  disconnectSidebarHydrationObserver();
+  state.instances = [];
+  setFriendState([]);
+  state.favorites = new Set();
+  state.favoriteRecords = new Map();
+  setFavoriteGroupState([]);
+  state.lastLoadedAt = 0;
+  state.user = null;
+  elements.list.replaceChildren();
+  elements.friendList.replaceChildren();
+  imageController.reset(); imageFallbacks.clear();
+  elements.friendCount.textContent = '0 / 0';
+  updateLoadedAtLabel();
+}
+
+function handleSessionExpired() {
+  hideActionToast();
+  state.loadGeneration += 1;
+  repository.dispose();
+  state.loading = false;
+  if (elements.reloadButton) elements.reloadButton.disabled = false;
+  clearDisplayedData();
+  elements.login?.classList.remove('hidden');
+  setStatus('VRChatのログインセッションが無効です。VRChat公式サイトで再ログインしてください。', true);
+}
+
+async function load({ reason = 'initial', preserveToast = false } = {}) {
+  const notify = reason !== 'initial';
   if (CONFIG.DEBUG_MODE) {
     loadDebugData();
     return;
   }
-  if (state.loading) return;
+  if (state.loading || state.favoriteMutationPending || state.pendingInvites.size) return;
+  repository.dispose();
+  repository = new DataRepository(new VrchatApiClient(), uiStorage);
+  const dataRepository = repository;
+  const generation = ++state.loadGeneration;
+  const current = () => generation === state.loadGeneration && !dataRepository.disposed;
+  hydrationController.reset();
   state.loading = true;
+  if (elements.reloadButton) elements.reloadButton.disabled = true;
+  if (['manual', 'cache', 'restore'].includes(reason)) scheduleAutoRefresh();
   state.dataFromCache = false;
   state.lastLoadedAt = 0;
-  repository.usedStaleFallback = false;
+  dataRepository.usedStaleFallback = false;
   elements.login?.classList.add('hidden');
-  setStatus('VRChatログインセッションを確認中…');
+  if (notify) {
+    setStatus('');
+    if (!preserveToast) showActionToast(reason === 'automatic'
+      ? '自動更新しています…' : '情報を更新しています…', { delay: 0 });
+  } else {
+    setStatus('VRChatログインセッションを確認中…');
+  }
 
   try {
     // Authentication must complete before any account-scoped cache can be used.
-    const user = await repository.fetchMe();
+    const user = await dataRepository.fetchMe();
+    if (!current()) return;
+    if (state.user?.id && state.user.id !== user.id) clearDisplayedData();
     state.user = user;
 
     // Do not paint stale cached lists first. Fetch the time-sensitive primary
     // datasets first so the first interactive render reflects current data (or
     // a same-account fallback only when the live request fails).
-    setStatus('フレンド情報を更新中…');
+    if (!notify) setStatus('フレンド情報を更新中…');
     const [friends, favoriteState] = await Promise.all([
-      repository.fetchFriends(),
-      repository.fetchFavorites(),
+      dataRepository.fetchFriends(),
+      dataRepository.fetchFavorites(),
     ]);
 
+    if (!current()) return;
     setFriendState(normalizeFriends(friends));
     applyFavoriteState(favoriteState);
     state.instances = buildLocations(
@@ -2080,42 +2227,33 @@ async function load() {
       locationCacheReader,
     );
 
-    state.lastLoadedAt = repository.primaryDataUpdatedAt || Date.now();
+    state.lastLoadedAt = dataRepository.primaryDataUpdatedAt || Date.now();
     // Repository exposes whether a primary dataset had to fall back to stale
     // same-account data. Keep that information visible without blocking the UI.
-    state.dataFromCache = Boolean(repository.usedStaleFallback);
+    state.dataFromCache = Boolean(dataRepository.usedStaleFallback);
+    state.loading = false;
     render();
     updateLoadedAtLabel();
     setStatus('');
+    if (notify) {
+      const message = reason === 'automatic' ? 'フレンド情報を自動更新しました' : 'フレンド情報を更新しました';
+      showActionToast(message + (state.dataFromCache ? '（一部キャッシュ）。' : '。'), { delay: 2800 });
+    }
 
     // Group Instances are secondary data for this screen. Load them after the
     // first interactive paint so tab switching and friend clicks remain
     // responsive even while group data is being fetched.
-    void refreshGroupDataInBackground(user.id).catch((error) => {
-      if (error?.status === 401) {
-        state.instances = [];
-        setFriendState([]);
-        state.favorites = new Set();
-        state.favoriteRecords = new Map();
-        setFavoriteGroupState([]);
-        setStatus('VRChatのログインセッションが無効です。VRChat公式サイトで再ログインしてください。', true);
-      }
+    void refreshGroupDataInBackground(user.id, dataRepository, generation).catch((error) => {
+      if (current() && error?.status === 401) handleSessionExpired();
     });
   } catch (error) {
-    if (error?.status === 401) {
-      state.instances = [];
-      setFriendState([]);
-      state.favorites = new Set();
-      state.favoriteRecords = new Map();
-      setFavoriteGroupState([]);
-      elements.list.innerHTML = '';
-      elements.login?.classList.remove('hidden');
-      setStatus('VRChatのログインセッションが無効です。VRChat公式サイトで再ログインしてください。', true);
-    } else {
-      setStatus(`取得に失敗しました: ${error?.message || error}`, true);
-    }
+    if (!current() || error?.name === 'AbortError') return;
+    if (error?.status === 401) handleSessionExpired();
+    else if (notify) showActionToast(`${reason === 'automatic' ? '自動更新' : '更新'}に失敗しました: ${error?.message || error}`, { error: true, delay: 5000 });
+    else setStatus(`取得に失敗しました: ${error?.message || error}`, true);
   } finally {
-    state.loading = false;
+    if (generation === state.loadGeneration) state.loading = false;
+    if (elements.reloadButton) elements.reloadButton.disabled = state.loading;
   }
 }
 
@@ -2190,6 +2328,7 @@ document.querySelectorAll('.instance-size-button').forEach((button) => {
     state.instanceSize = size;
     applyInstanceSize();
     persistUiPreferences();
+    render({ resetScroll: false });
   });
 });
 
@@ -2294,6 +2433,62 @@ window.addEventListener('resize', () => {
 elements.friendList?.addEventListener('keydown', onFriendListKeydown);
 elements.loginButton?.addEventListener('click', () => {
   window.open(CONFIG.LOGIN_URL, '_blank', 'noopener,noreferrer');
+});
+
+elements.reloadButton?.addEventListener('click', async () => {
+  if (state.loading) return;
+  if (state.favoriteMutationPending || state.pendingInvites.size) {
+    showActionToast('操作の完了後に更新してください。');
+    return;
+  }
+  await load({ reason: 'manual' });
+});
+elements.clearCacheButton?.addEventListener('click', async () => {
+  if (state.favoriteMutationPending || state.pendingInvites.size) {
+    showActionToast('操作の完了後にキャッシュを削除してください。');
+    return;
+  }
+  state.loadGeneration += 1;
+  repository.dispose();
+  state.loading = false;
+  clearDisplayedData();
+  imageController.reset();
+  const cleared = uiStorage.clearDataCaches();
+  // Notify other open Viewer tabs before rebuilding this tab's caches.
+  uiStorage.set('vrc_viewer_cache_clear_event', { at: Date.now(), nonce: Math.random() });
+  setSettingsPanelOpen(false);
+  showActionToast(cleared ? 'キャッシュを削除しました。最新情報を取得します。' : '一部のキャッシュを削除できませんでした。', { error: !cleared });
+  await load({ reason: 'cache', preserveToast: true });
+});
+window.addEventListener('storage', event => {
+  if (event.key !== 'vrc_viewer_cache_clear_event') return;
+  hideActionToast();
+  state.loadGeneration += 1;
+  // Cancel pending saves before disposing; do not resurrect cleared records.
+  uiStorage.objectCaches.forEach(cache => cache.clearMemory());
+  repository.dispose();
+  state.loading = false;
+  clearDisplayedData();
+  if (elements.reloadButton) elements.reloadButton.disabled = false;
+  setStatus('');
+  showActionToast('別の画面でキャッシュが削除されました。「更新」で最新情報を取得してください。', { delay: 8000 });
+});
+window.addEventListener('pagehide', () => { uiStorage.flush(); repository.dispose(); imagePool.clear(); });
+window.addEventListener('pageshow', event => { if (event.persisted) { imageController.reset(); void load({ reason: 'restore' }); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    clearAutoRefreshTimer();
+    uiStorage.flush();
+    hydrationController.pause();
+    disconnectSidebarHydrationObserver();
+    hideFriendInstancePreview({ immediate: true });
+  } else {
+    scheduleAutoRefresh({ preserveDue: true });
+    if (!state.loading && !repository.disposed) {
+      hydrationController.sync();
+      syncSidebarHydration();
+    }
+  }
 });
 
 restoreUiPreferences();

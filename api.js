@@ -1,3 +1,4 @@
+import { abortError, waitUntil, waitForVisible } from './request-policy.js';
 import { CONFIG } from './config.js';
 import { ObjectCache, ValueCache, accountCacheKey } from './storage.js';
 import { slimWorld } from './domain.js';
@@ -11,65 +12,60 @@ export class ApiError extends Error {
   }
 }
 
-class RequestGate {
-  constructor(intervalMs) {
-    this.intervalMs = intervalMs;
-    this.nextAllowedAt = 0;
-    this.tail = Promise.resolve();
-  }
-
-  acquire() {
-    const ticket = this.tail.then(async () => {
-      const delay = Math.max(0, this.nextAllowedAt - Date.now());
-      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-      this.nextAllowedAt = Date.now() + this.intervalMs;
-    });
-    this.tail = ticket.catch(() => {});
-    return ticket;
-  }
-}
-
 export class VrchatApiClient {
   constructor(baseUrl = CONFIG.API_BASE) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
-    this.gate = new RequestGate(CONFIG.API_MIN_INTERVAL_MS);
+    this.controller = new AbortController();
   }
+
+  abort() { this.controller.abort(); }
 
   async fetchJson(path, options = {}) {
     const url = /^https?:\/\//i.test(path) ? path : `${this.baseUrl}${path}`;
-
-    for (let attempt = 0; attempt <= CONFIG.API_MAX_RETRIES; attempt += 1) {
-      await this.gate.acquire();
-
-      const response = await fetchUsingVrchatSession(url, {
-        method: options.method || 'GET',
-        headers: {
-          Accept: 'application/json',
-          ...(options.headers || {}),
-        },
+    const method = (options.method || 'GET').toUpperCase();
+    const signal = this.controller.signal;
+    let attempt = 0;
+    while (true) {
+      if (signal.aborted) throw abortError();
+      if (method === 'GET') await waitForVisible(signal);
+      let response;
+      try { response = await fetchUsingVrchatSession(url, {
+        method, headers: options.headers,
         body: typeof options.body === 'string' ? options.body : undefined,
-      });
-
+      }); } catch (error) {
+        if (signal.aborted) throw abortError();
+        error.outcomeUnknown = method !== 'GET' && error?.code !== 'INVALID_URL';
+        throw error;
+      }
+      if (signal.aborted) throw abortError();
+      if (response.deferred) {
+        await waitUntil(Math.max(Date.now() + 25, response.retryAt), signal);
+        continue;
+      }
       if (response.ok) {
-        try {
-          return JSON.parse(response.text);
-        } catch {
-          throw new ApiError(response.status, 'VRChat API returned invalid JSON');
+        if (response.status === 204 || !response.text.trim()) return null;
+        try { return JSON.parse(response.text); }
+        catch {
+          const error = new ApiError(response.status, 'VRChat API returned invalid JSON');
+          error.outcomeUnknown = method !== 'GET';
+          throw error;
         }
       }
-
-      if (response.status !== 429 || attempt >= CONFIG.API_MAX_RETRIES) {
-        throw new ApiError(response.status);
+      // Retry rejected writes only for 429. Never replay an uncertain write.
+      const canRetry = response.status === 429 || (method === 'GET' && response.status >= 500);
+      if (canRetry && attempt < CONFIG.API_MAX_RETRIES) {
+        const fallback = Date.now() + 1000 * (2 ** attempt);
+        attempt += 1;
+        await waitUntil(Math.max(fallback, response.retryAt), signal);
+        continue;
       }
-
-      const retryAfter = Number(response.headers?.['retry-after']);
-      const backoffMs = Number.isFinite(retryAfter) && retryAfter > 0
-        ? retryAfter * 1000
-        : 1000 * (2 ** attempt);
-      await new Promise((resolve) => setTimeout(resolve, Math.min(backoffMs, 15000)));
+      const error = new ApiError(response.status, response.code === 'TIMEOUT'
+        ? '通信がタイムアウトしました。時間をおいて再試行してください。'
+        : `VRChat API ${response.status}`);
+      error.code = response.code;
+      error.outcomeUnknown = method !== 'GET' && (response.outcomeUnknown || response.status === 0 || response.status >= 500);
+      throw error;
     }
-
-    throw new ApiError(599, 'VRChat API request failed');
   }
 
   fetchMe() {
@@ -303,12 +299,29 @@ function applyLocalFavoriteMutation(cached, { userId, groupName = '', remove = f
 
 export class DataRepository {
   constructor(api, storage) {
-    this.api = api;
+    this.epoch = 0;
+    this.disposed = false;
+    this.inflight = new Map();
+    this.rawApi = api;
+    this.api = new Proxy(api, {
+      get: (target, name) => typeof target[name] === 'function' ? async (...args) => {
+        const epoch = this.epoch;
+        this.assertActive(epoch);
+        try {
+          const result = await target[name](...args);
+          this.assertActive(epoch);
+          return result;
+        } catch (error) {
+          this.assertActive(epoch);
+          throw error;
+        }
+      } : target[name],
+    });
     this.storage = storage;
-    this.userDetailCache = new ObjectCache(storage, CONFIG.USER_DETAIL_CACHE_KEY, 500);
-    this.instanceCache = new ObjectCache(storage, CONFIG.INSTANCE_CACHE_KEY, 200);
-    this.worldCache = new ObjectCache(storage, CONFIG.WORLD_CACHE_KEY, 500);
-    this.groupCache = new ObjectCache(storage, CONFIG.GROUP_CACHE_KEY, 300);
+    this.userDetailCache = null;
+    this.instanceCache = null;
+    this.worldCache = null;
+    this.groupCache = null;
     this.currentUserId = null;
     this.friendCache = null;
     this.favoriteCache = null;
@@ -317,9 +330,40 @@ export class DataRepository {
     this.primaryDataUpdatedAt = 0;
   }
 
+  assertActive(epoch = this.epoch) {
+    if (this.disposed || epoch !== this.epoch) throw abortError();
+  }
+
+  dispose() {
+    this.disposed = true;
+    this.epoch += 1;
+    this.rawApi.abort?.();
+    this.inflight.clear();
+    for (const cache of [this.userDetailCache, this.instanceCache, this.worldCache, this.groupCache]) cache?.dispose();
+  }
+
+  singleFlight(key, loader) {
+    if (this.inflight.has(key)) return this.inflight.get(key);
+    const epoch = this.epoch;
+    const task = Promise.resolve().then(() => { this.assertActive(epoch); return loader(); })
+      .finally(() => { if (this.inflight.get(key) === task) this.inflight.delete(key); });
+    this.inflight.set(key, task);
+    return task;
+  }
+
   setCurrentUser(userId) {
     if (!userId || typeof userId !== 'string') throw new Error('A VRChat user ID is required.');
+    this.assertActive();
+    this.epoch += 1;
+    this.inflight.clear();
+    for (const cache of [this.userDetailCache, this.instanceCache, this.worldCache, this.groupCache]) cache?.dispose();
     this.currentUserId = userId;
+    this.userDetailCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.USER_DETAIL_CACHE_KEY, userId), 500);
+    this.instanceCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.INSTANCE_CACHE_KEY, userId), 200);
+    this.worldCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.WORLD_CACHE_KEY, userId), 500);
+    this.groupCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.GROUP_CACHE_KEY, userId), 300);
+    // Older unscoped detail records cannot be attributed to a logged-in account.
+    for (const key of [CONFIG.USER_DETAIL_CACHE_KEY, CONFIG.INSTANCE_CACHE_KEY, CONFIG.WORLD_CACHE_KEY, CONFIG.GROUP_CACHE_KEY]) this.storage.remove?.(key);
     // A login/account switch starts a new primary-data lifecycle. Do not carry
     // stale-fallback state or a previous account's timestamp into the new one.
     this.usedStaleFallback = false;
@@ -342,14 +386,20 @@ export class DataRepository {
   }
 
   requireCurrentUser() {
+    this.assertActive();
     if (!this.currentUserId || !this.friendCache || !this.favoriteCache || !this.groupInstancesCache) {
       throw new Error('Current VRChat user is not initialized.');
     }
   }
 
-  async fetchUser(userId) {
+  fetchUser(userId) {
+    this.requireCurrentUser();
+    return this.singleFlight('fetchUser:' + userId, () => this.fetchUserUncached(userId));
+  }
+
+  async fetchUserUncached(userId) {
     if (!userId) return null;
-    const cached = this.userDetailCache.getRecord(userId, CONFIG.USER_DETAIL_CACHE_TTL_MS);
+    const cached = this.userDetailCache.getRecord(userId, CONFIG.USER_DETAIL_CACHE_TTL_MS, CONFIG.GROUP_FAILURE_CACHE_TTL_MS);
     if (cached) return cached.data;
 
     try {
@@ -375,7 +425,8 @@ export class DataRepository {
       this.userDetailCache.set(userId, normalized);
       return normalized;
     } catch (error) {
-      if (error?.status >= 400 && error.status < 500) {
+      if (error?.name === 'AbortError') throw error;
+      if ([403, 404].includes(error?.status)) {
         this.userDetailCache.setRecord(userId, null, { status: error.status });
       }
       if (error?.status === 401) throw error;
@@ -399,11 +450,11 @@ export class DataRepository {
   }
 
   getCachedInstance(location) {
-    return this.instanceCache.get(location, CONFIG.INSTANCE_CACHE_TTL_MS);
+    return this.instanceCache?.get(location, CONFIG.INSTANCE_CACHE_TTL_MS) ?? null;
   }
 
   getCachedWorld(worldId) {
-    return this.worldCache.get(worldId, CONFIG.WORLD_CACHE_TTL_MS);
+    return this.worldCache?.get(worldId, CONFIG.WORLD_CACHE_TTL_MS) ?? null;
   }
 
   async fetchMe() {
@@ -424,6 +475,7 @@ export class DataRepository {
       this.primaryDataUpdatedAt = Math.max(this.primaryDataUpdatedAt, Date.now());
       return friends;
     } catch (error) {
+      if (error?.name === 'AbortError') throw error;
       if (error?.status === 401) throw error;
       const record = this.friendCache.getStaleRecord();
       const cached = record?.data;
@@ -444,6 +496,7 @@ export class DataRepository {
     try {
       rawGroups = await this.api.fetchFavoriteGroups();
     } catch (error) {
+      if (error?.name === 'AbortError') throw error;
       if (error?.status === 401) throw error;
       const cached = this.favoriteCache.getStaleRecord()?.data;
       fallbackGroups = Array.isArray(cached?.groups) ? cached.groups : [];
@@ -462,6 +515,7 @@ export class DataRepository {
     try {
       return await this.fetchFavoritesStrict();
     } catch (error) {
+      if (error?.name === 'AbortError') throw error;
       if (error?.status === 401) throw error;
       const record = this.favoriteCache.getStaleRecord();
       const cached = record?.data;
@@ -477,6 +531,7 @@ export class DataRepository {
     try {
       return { favoriteState: await this.fetchFavoritesStrict(), syncFailed: false, syncError: null };
     } catch (syncError) {
+      if (syncError?.name === 'AbortError') throw syncError;
       const cached = this.favoriteCache.getStaleRecord()?.data;
       const favoriteState = applyLocalFavoriteMutation(cached, localMutation);
       this.favoriteCache.set(favoriteCacheDataFromState(favoriteState));
@@ -502,6 +557,8 @@ export class DataRepository {
         deletedIds.push(recordId);
       }
     } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      if (error?.outcomeUnknown) { error.favoriteOutcomeUnknown = true; throw error; }
       // A partial delete is rare, but if it occurs, try to restore the old list.
       if (deletedIds.length && oldTags.length) {
         try {
@@ -519,6 +576,8 @@ export class DataRepository {
     try {
       createdRecord = await this.api.addFriendFavorite(userId, [groupName]);
     } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      if (error?.outcomeUnknown) { error.favoriteOutcomeUnknown = true; throw error; }
       // Only an actual write failure triggers rollback. A later refresh failure
       // must never undo an already-successful Favorite move.
       if (deletedIds.length && oldTags.length) {
@@ -567,6 +626,7 @@ export class DataRepository {
       this.groupInstancesCache.set({ userId, items });
       return items;
     } catch (error) {
+      if (error?.name === 'AbortError') throw error;
       if (error?.status === 401) throw error;
       const cached = this.groupInstancesCache.getStale();
       if (cached?.userId === userId && Array.isArray(cached.items)) {
@@ -577,9 +637,14 @@ export class DataRepository {
     }
   }
 
-  async fetchGroup(groupId) {
+  fetchGroup(groupId) {
+    this.requireCurrentUser();
+    return this.singleFlight('fetchGroup:' + groupId, () => this.fetchGroupUncached(groupId));
+  }
+
+  async fetchGroupUncached(groupId) {
     if (!groupId) return null;
-    const cached = this.groupCache.getRecord(groupId, CONFIG.GROUP_CACHE_TTL_MS);
+    const cached = this.groupCache.getRecord(groupId, CONFIG.GROUP_CACHE_TTL_MS, CONFIG.GROUP_FAILURE_CACHE_TTL_MS);
     if (cached) return cached.data;
 
     try {
@@ -594,14 +659,21 @@ export class DataRepository {
       this.groupCache.set(groupId, normalized);
       return normalized;
     } catch (error) {
-      if (error?.status >= 400 && error.status < 500) {
+      if (error?.name === 'AbortError') throw error;
+      if ([403, 404].includes(error?.status)) {
         this.groupCache.setRecord(groupId, null, { status: error.status });
       }
+      if (error?.status === 401) throw error;
       return null;
     }
   }
 
-  async fetchInstance(location) {
+  fetchInstance(location) {
+    this.requireCurrentUser();
+    return this.singleFlight('fetchInstance:' + location, () => this.fetchInstanceUncached(location));
+  }
+
+  async fetchInstanceUncached(location) {
     const cached = this.instanceCache.get(location, CONFIG.INSTANCE_CACHE_TTL_MS);
     if (cached !== null) return cached;
     const data = await this.api.fetchInstance(location);
@@ -609,7 +681,12 @@ export class DataRepository {
     return data;
   }
 
-  async fetchWorld(worldId) {
+  fetchWorld(worldId) {
+    this.requireCurrentUser();
+    return this.singleFlight('fetchWorld:' + worldId, () => this.fetchWorldUncached(worldId));
+  }
+
+  async fetchWorldUncached(worldId) {
     if (!worldId || worldId === 'offline' || worldId === 'private') return null;
     const cached = this.worldCache.get(worldId, CONFIG.WORLD_CACHE_TTL_MS);
     if (cached !== null) return cached;

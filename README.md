@@ -2,7 +2,7 @@
 
 VRChatのオンラインフレンドと Friend / Group インスタンスを、Chrome上で見やすく一覧表示する Manifest V3 拡張機能です。
 
-**Current version: v1.5.3.1**
+**Current version: v1.5.4.5**
 
 - Chrome Web Store: https://chromewebstore.google.com/detail/vrchat-friends-group-inst/pncejiodjgmlklhgkpclcplgacbohbla
 - Releases: https://github.com/mos-vrc/vrchat-friends-and-group-instance-viewer/releases
@@ -13,13 +13,13 @@ VRChatのオンラインフレンドと Friend / Group インスタンスを、C
 
 ## ソースコードについて
 
-v1.5.3.1 の拡張機能本体ソースを公開用として管理しています。`manifest.json`、JavaScript、HTML、CSS、アイコンを確認できる構成です。
+v1.5.4.5 の拡張機能本体ソースを公開用として管理しています。`manifest.json`、JavaScript、HTML、CSS、アイコンを確認できる構成です。
 
 各ファイルの SHA-256 は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。
 
-GitHub Release で配布する v1.5.3.1 配布ZIPの SHA-256:
+このZIPは v1.5.4.5 の配布用ソースパッケージです。Chrome Web Store提出用パッケージと拡張機能本体は共通です。撮影用パッケージは別途用意しています。
 
-`39a7001db3bbba5f61e3488718abbfe45a28df6c3698a2835d44c1605da67e57`
+変更点は [CHANGELOG.md](./CHANGELOG.md) を参照してください。
 
 ## 主な機能
 
@@ -32,11 +32,16 @@ GitHub Release で配布する v1.5.3.1 配布ZIPの SHA-256:
 - `Invite Me`
 - ワールド名からVRChat公式Launchページを開く機能
 - ユーザーアイコンからVRChat公式プロフィールを開く機能
-- フレンド一覧の折り畳み
+- 左フレンド一覧の `通常表示 → 今居るインスタンスも表示 → 非表示` の3段階切り替え
 - 表示サイズ `小 / 中 / 大`
 - 表示形式 `シンプル / ノーマル`
 - テーマ `ライト / アッシュ / ダークブルー / ダーク`
-- 自動更新 `なし / 10分 / 30分`
+- 自動更新 `なし / 10分 / 30分`（表示中のみ。非表示中に期限を迎えた場合は画面へ戻った際に1回更新）
+- 手動の `更新` と、表示設定を残した `キャッシュを削除`
+- 自動/手動更新の進行・結果、通常の操作案内は簡易メッセージに表示。初回読み込みと再ログインが必要な案内はステータス欄に表示
+- 「すべて」のPrivateは初期状態で折り畳み、展開時に表示用の画像読込を開始
+- ユーザー画像256px・World画像512pxを固定取得（認識可能な未署名VRChat画像URL）。同じURLの画像データを画面内で共有
+- 画像取得は各Viewer画面で最大10並列・開始間隔50ms・本文を含む20秒上限。表示付近のみ取得
 
 
 ### フレンド表示
@@ -55,6 +60,8 @@ GitHub Release で配布する v1.5.3.1 配布ZIPの SHA-256:
 - ユーザーカードへ約0.55秒カーソルを合わせると、そのインスタンスの既存カード相当のプレビューを表示します。プレビューでは把握できている参加者一覧を確認でき、Join可能なインスタンスでは `Invite Me` も利用できます。
 - Private / Other Platform はホバープレビューを表示しません。プレビューはマウスポインタ右下付近に表示し、参加者は最大5列で折り返します。
 - フレンドカードは画面幅に応じて均等に可変し、Favorite Listごとの人数差でカード幅が変わらないようにしています。
+- 左フレンド一覧でも通常インスタンスのフレンドへ約0.55秒カーソルを合わせると、同じホバープレビューを表示します。Private / Other Platformでは表示しません。
+- 左フレンド一覧の「今居るインスタンスも表示」では、公開範囲・`フレンド数 / 参加人数 / 最大人数`・ワールド名をサムネイル上へ表示します。リージョンは表示せず、画面内へ近づいたフレンドから既存のInstance / Worldキャッシュ・Hydration処理を再利用して取得します。
 
 ### Favorite登録・解除
 
@@ -92,7 +99,7 @@ GitHubが自動生成する `Source code (zip)` ではなく、Release の Asset
 
 本拡張機能は、Chromeにすでに存在するVRChatのブラウザログインセッションを利用します。
 
-- APIリクエストは `https://vrchat.com/api/1/` に限定しています。
+- 通常APIリクエストは `https://vrchat.com/api/1/` に限定しています。画像本文取得は別経路で、VRChat関連3ホストだけに接続します。
 - Extension Service Worker から `credentials: 'include'` でアクセスします。
 - `cookies` 権限と `chrome.cookies` APIは使用しません。
 - VRChatの認証Cookie値を拡張機能JavaScriptから読み取りません。
@@ -133,7 +140,13 @@ Friends / Favorites / Group Instances は通常ロード時にライブ取得を
 - Group: 24時間
 - Group取得失敗: 10分
 
-APIリクエスト間には最低250msの間隔を設け、429応答時は `Retry-After` を考慮してバックオフしながら最大3回までリトライします。
+APIリクエストはService Workerで複数のViewer画面をまとめて制御し、開始間隔を最低250ms、同時実行を最大2件に制限します。同じGET URLの実行中の要求は共有します。429と5xxの応答では他のAPI要求も待機し、Retry-Afterの秒数・HTTP日時を尊重します。待機時刻だけをIndexedDBに保存し、Workerの再起動後も維持します。
+
+GETは429/5xxに対して最大3回再試行します。POST/DELETEは429以外では自動再送しません。1回の実通信は応答本文の読み取りを含め20秒でタイムアウトします。変更結果が不明なFavorite操作やInvite Meは、成功済みの可能性を考慮し自動再送・自動取り消しを避け、ユーザーへ確認を案内します。
+
+取得データのキャッシュはWorld/Instance/User/Groupを含めアカウントごとに分離します。以前のアカウント共通の詳細キャッシュは引き継ぎません。オプションのキャッシュ削除は全アカウントの取得データを削除し、表示設定を保ったまま現在のアカウントを再取得します。通信の待機時刻は削除対象にせず、429待機を迂回しません。
+
+詳細キャッシュへの書き込みは300ms単位でまとめ、画面を離れる際にも保存します。カード・画像は変更した部分だけ更新します。対応するVRChat画像URLだけをユーザー256px・World512pxへ固定し、サイズ指定先が400/404/415の場合だけ元URLへ1回戻します。署名付きURL等は書き換えません。
 
 ## プライバシー
 

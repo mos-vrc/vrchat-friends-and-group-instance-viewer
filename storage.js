@@ -1,3 +1,5 @@
+import { CONFIG } from './config.js';
+
 export function accountCacheKey(baseKey, userId) {
   if (!userId || typeof userId !== 'string') throw new Error('A VRChat user ID is required for an account cache key.');
   return `${baseKey}:${encodeURIComponent(userId)}`;
@@ -6,6 +8,28 @@ export function accountCacheKey(baseKey, userId) {
 export class JsonStorage {
   constructor(storage = window.localStorage) {
     this.storage = storage;
+    this.objectCaches = new Set();
+  }
+
+  remove(key) {
+    try { this.storage.removeItem(key); return true; } catch { return false; }
+  }
+
+  flush() { this.objectCaches.forEach(cache => cache.flush()); }
+
+  dispose() { this.objectCaches.forEach(cache => cache.dispose()); this.objectCaches.clear(); }
+
+  clearDataCaches() {
+    this.objectCaches.forEach(cache => cache.clearMemory());
+    const bases = Object.entries(CONFIG).filter(([name]) => name.endsWith('_CACHE_KEY')).map(([, value]) => value);
+    let success = true;
+    try {
+      const keys = Array.from({ length: this.storage.length }, (_, i) => this.storage.key(i));
+      for (const key of keys) {
+        if (bases.some(base => key === base || key?.startsWith(base + ':'))) success = this.remove(key) && success;
+      }
+    } catch { success = false; }
+    return success;
   }
 
   get(key, fallback = null) {
@@ -79,6 +103,8 @@ export class ObjectCache {
     this.loaded = false;
     this.entries = new Map();
     this.dirty = false;
+    this.timer = null;
+    this.storage.objectCaches?.add(this);
   }
 
   load() {
@@ -122,11 +148,12 @@ export class ObjectCache {
     this.persist();
   }
 
-  getRecord(key, ttlMs) {
+  getRecord(key, ttlMs, failureTtlMs = ttlMs) {
     this.load();
     const record = this.entries.get(key);
     if (!record) return null;
-    if (Date.now() - record.cachedAt >= ttlMs) {
+    const effectiveTtl = record.status ? failureTtlMs : ttlMs;
+    if (Date.now() - record.cachedAt >= effectiveTtl) {
       this.entries.delete(key);
       this.dirty = true;
       this.persist();
@@ -144,7 +171,27 @@ export class ObjectCache {
     this.dirty = true;
   }
 
+  clearMemory() {
+    clearTimeout(this.timer);
+    this.timer = null;
+    this.entries.clear();
+    this.loaded = true;
+    this.dirty = false;
+  }
+
+  dispose() {
+    this.flush();
+    this.storage.objectCaches?.delete(this);
+  }
+
   persist() {
+    if (this.timer || !this.dirty) return;
+    this.timer = setTimeout(() => { this.timer = null; this.flush(); }, CONFIG.CACHE_WRITE_DELAY_MS);
+  }
+
+  flush() {
+    clearTimeout(this.timer);
+    this.timer = null;
     if (!this.loaded || !this.dirty) return;
     const object = Object.fromEntries(this.entries);
     if (this.storage.set(this.key, object)) this.dirty = false;

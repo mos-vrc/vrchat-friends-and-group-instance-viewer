@@ -23,10 +23,25 @@ export class InstanceHydrationController {
     this.concurrency = Math.max(1, concurrency);
     this.preloadPx = Math.max(0, preloadPx);
     this.initialCount = Math.max(0, initialCount);
+    this.generation = 0;
     this.observer = null;
     this.queue = [];
     this.queuedLocations = new Set();
     this.activeLocations = new Set();
+  }
+
+  reset() {
+    this.generation += 1;
+    this.disconnect();
+    this.queue = [];
+    this.queuedLocations.clear();
+    this.activeLocations = new Set();
+  }
+
+  pause() {
+    this.disconnect();
+    this.queue = [];
+    this.queuedLocations.clear();
   }
 
   disconnect() {
@@ -36,6 +51,7 @@ export class InstanceHydrationController {
 
   sync({ mode = 'normal', priorityLocations = [] } = {}) {
     if (!this.root) return;
+    if (globalThis.document?.hidden) { this.pause(); return; }
     this.disconnect();
 
     const cards = [...this.root.querySelectorAll('.card, .friend-location-item[data-location]')];
@@ -113,7 +129,7 @@ export class InstanceHydrationController {
   }
 
   enqueue(entry) {
-    if (!entry || !this.needsHydration(entry)) return;
+    if (globalThis.document?.hidden || !entry || !this.needsHydration(entry)) return;
     const location = entry.location;
     if (!location || this.activeLocations.has(location) || this.queuedLocations.has(location)) return;
     this.queuedLocations.add(location);
@@ -122,6 +138,7 @@ export class InstanceHydrationController {
   }
 
   pump() {
+    if (globalThis.document?.hidden) { this.pause(); return; }
     while (this.activeLocations.size < this.concurrency && this.queue.length) {
       const job = this.queue.shift();
       if (!job) continue;
@@ -131,10 +148,12 @@ export class InstanceHydrationController {
       const current = this.getEntries().find((entry) => entry.location === job.location) || job.entry;
       if (!this.needsHydration(current)) continue;
 
+      const generation = this.generation;
       this.activeLocations.add(job.location);
       Promise.resolve(this.hydrate(job.location, current))
         .catch(() => {})
         .finally(() => {
+          if (generation !== this.generation) return;
           this.activeLocations.delete(job.location);
 
           // A render may have replaced the Entry object while the request was
