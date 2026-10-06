@@ -2,7 +2,7 @@
 
 VRChatのオンラインフレンドと Friend / Group インスタンスを、Chrome上で見やすく一覧表示する Manifest V3 拡張機能です。
 
-**Current version: v1.5.4.22**
+**Current version: v1.5.4.23**
 
 - Chrome Web Store: https://chromewebstore.google.com/detail/vrchat-friends-group-inst/pncejiodjgmlklhgkpclcplgacbohbla
 - Releases: https://github.com/mos-vrc/vrchat-friends-and-group-instance-viewer/releases
@@ -13,11 +13,11 @@ VRChatのオンラインフレンドと Friend / Group インスタンスを、C
 
 ## ソースコードについて
 
-v1.5.4.22 の拡張機能本体ソースを公開用として管理しています。`manifest.json`、JavaScript、HTML、CSS、アイコンを確認できる構成です。
+v1.5.4.23 の拡張機能本体ソースを公開用として管理しています。`manifest.json`、JavaScript、HTML、CSS、アイコンを確認できる構成です。
 
 各ファイルの SHA-256 は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。
 
-このZIPは v1.5.4.22 の配布用ソースパッケージです。
+このZIPは v1.5.4.23 の配布用ソースパッケージです。
 
 変更点は [CHANGELOG.md](./CHANGELOG.md) を参照してください。
 
@@ -214,3 +214,7 @@ Offlineの一覧と表示対象総数は、キャッシュまたはAPI応答で�
 左側一覧の右端をマウスで左右にドラッグすると幅を変更できます。通常表示と居場所付き表示の幅はそれぞれ保存されます。端をキーボードで選択して左右矢印でも調整できます。右側の表示領域を確保するため、ウィンドウ幅に応じて上限を設けています。
 
 居場所付き一覧の既定幅は280px（調整範囲の最小値）です。Offline情報を読み込み中のステータスは表示しません。
+
+## Chrome標準の多言語対応
+
+拡張機能の名称・説明・ツールバーボタンのタイトルは `_locales/ja/messages.json` と `_locales/en/messages.json` で定義しています。Chrome側の表示はChromeのUI言語に従い、未対応言語は英語を使用します。画面内の日本語／English選択は独立して保存され、Chromeの表示言語を変えずに切り替えられます。初回の画面内言語はブラウザの優先言語に従います。

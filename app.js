@@ -2218,7 +2218,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   renderFriendSidebar();
 
   const manifest = globalThis.chrome?.runtime?.getManifest?.();
-  const appVersion = manifest?.version_name || manifest?.version || '1.5.4.22';
+  const appVersion = manifest?.version_name || manifest?.version || '1.5.4.23';
   const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
   if (state.viewMode === VIEW_MODES.FRIENDS) {
     patchMarkup(elements.list, `${renderFriendLocationView()}${credit}`);

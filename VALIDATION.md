@@ -1,9 +1,8 @@
-# v1.5.4.22 validation
+# v1.5.4.23 validation
 
-- 11 production browser checks passed: Offline loading status remains hidden while a delayed bulk request is active; timestamps remain local; cache freshness, language settings and refresh behavior remain functional.
-- Location-mode default width is 280px, equal to its resizing minimum. Old default 336px preferences migrate; custom widths remain stored.
-- Normal friend cards were checked at their exact new minimum widths: small 320px, medium 360px and large 400px. Full Offline timestamps fit before the thumbnail. Normal timestamp layout also passed at 860/1280px across all sizes and themes.
-- 15 language/sidebar browser checks passed, including language detection/persistence, pointer and keyboard resizing, cancellation, zoom, bounds, reload and cache clearing.
-- Tests use local Chromium and mock APIs. No real-account mutations or store submission performed.
-- Normal, Chrome Web Store and screenshot packages were built. Web Store runtime files match the normal release exactly; neither includes screenshot fixtures.
-- 13 screenshot browser checks passed, including local demo images, state toggles, language switching and sidebar resizing, with no API/external requests or runtime errors. Screenshot action launcher handler passed.
+- All three packages include matching Japanese and English Chrome message catalogs, default_locale=en, and valid manifest references for name, description and action.default_title. Catalog strings are nonempty and within metadata length limits.
+- Production HTML/JS/CSS match v1.5.4.22 byte-for-byte except version strings. Existing initial preferred-language selection, saved override and live UI switching are retained.
+- 13 screenshot browser checks passed: all themes/sizes/tabs, language switching, width resizing, Offline/OtherPlatform, local images and refresh. No API/external requests or JavaScript errors.
+- The local headless Chromium could not load an unpacked extension service worker, so Chrome-managed catalog selection and manifest substitution were validated structurally rather than through an installed-extension browser test.
+- English is the default catalog for unsupported Chrome UI languages. Chrome metadata follows Chrome UI language independently of the app language setting.
+- No new permissions. No store submission or real-account mutations.

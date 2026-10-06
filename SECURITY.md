@@ -1,6 +1,6 @@
 # Security / 通信仕様
 
-このページは、VRChat Friends & Group Instance Viewer v1.5.4.22 の認証・通信仕様を確認しやすくするための補足資料です。
+このページは、VRChat Friends & Group Instance Viewer v1.5.4.23 の認証・通信仕様を確認しやすくするための補足資料です。
 
 ## VRChatログインセッション
 
@@ -42,7 +42,7 @@ APIリクエストは `background.js` と `session.js` の両方で `https://vrc
 
 ## 開発者サーバーへの送信
 
-v1.5.4.22には、開発者独自サーバーへフレンド情報、インスタンス情報、認証情報等を送信する処理はありません。
+v1.5.4.23には、開発者独自サーバーへフレンド情報、インスタンス情報、認証情報等を送信する処理はありません。
 
 Google Analytics、Sentry、広告SDK等の外部分析・テレメトリも使用していません。
 
@@ -66,7 +66,7 @@ VRChat APIクライアントを識別できるよう、通常のChrome User-Agen
 
 各拡張機能ファイルのSHA-256は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。この動作確認用パッケージでは未作成のGitHub Release ZIPのハッシュは掲載しません。
 
-## v1.5.4.22の通信制御
+## v1.5.4.23の通信制御
 
 - APIはHTTPS・vrchat.comの標準ポート・/api/1/以下へ制限し、URL内の資格情報を拒否します。
 - Workerは自身の拡張機能からのメッセージだけ受け付け、使用するGET/POST/DELETEと、名称変更専用のPUT以外のメソッドを拒否します。外部から渡された任意のヘッダーを転送せず、Acceptと必要なContent-Typeだけを設定します。
@@ -91,7 +91,7 @@ Favorite List移動のロールバックは、削除後の再登録そのもの�
 
 成功後はFavorite Groupメタデータを1回取得して表示名を確認し、アカウントごとの既存Favoriteキャッシュを更新します。再確認だけが失敗した場合は保存済みの名前を保持します。保存要求の結果が不明な場合は自動再送せず、手動更新での確認を案内します。認証切れ・アカウント変更・キャッシュ削除後の遅い応答は表示とキャッシュへ反映しません。
 
-## v1.5.4.22の画像取得
+## v1.5.4.23の画像取得
 
 - images.jsは画像本体をGETで取得し、検証したPNG/JPEG/GIF/WebP/AVIFのバイト列をメモリ上のBlobとして共有。IndexedDB/localStorageへ画像本体や署名URLを新たに保存しない。
 - URLはHTTPSのVRChat関連3ホストに限定し、URL内のユーザー名/パスワードを拒否。/api/以下は/api/1/image/または/api/1/file/だけ許可し、/auth等の認証APIへ画像としてアクセスしない。

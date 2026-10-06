@@ -1,0 +1,14 @@
+{
+  "extensionName": {
+    "message": "VRChat Friends & Group Instance Viewer",
+    "description": "Extension product name; shared across languages."
+  },
+  "extensionDescription": {
+    "message": "VRChatのオンラインフレンドとFriend / Groupインスタンスを一覧表示し、Favorite管理やフレンドの居場所確認をしやすくします。",
+    "description": "Description shown by Chrome in extension management."
+  },
+  "extensionActionTitle": {
+    "message": "VRChat Friends & Group Instance Viewer",
+    "description": "Tooltip for the toolbar button."
+  }
+}
