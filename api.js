@@ -1,3 +1,4 @@
+import { t } from './i18n.js';
 import { abortError, waitUntil, waitForVisible } from './request-policy.js';
 import { CONFIG } from './config.js';
 import { ObjectCache, ValueCache, accountCacheKey } from './storage.js';
@@ -60,7 +61,7 @@ export class VrchatApiClient {
         continue;
       }
       const error = new ApiError(response.status, response.code === 'TIMEOUT'
-        ? '通信がタイムアウトしました。時間をおいて再試行してください。'
+        ? t('通信がタイムアウトしました。時間をおいて再試行してください。')
         : `VRChat API ${response.status}`);
       error.code = response.code;
       error.outcomeUnknown = method !== 'GET' && (response.outcomeUnknown || response.status === 0 || response.status >= 500);
@@ -72,29 +73,47 @@ export class VrchatApiClient {
     return this.fetchJson('/auth/user');
   }
 
-  fetchFriendsPage(offset) {
-    return this.fetchJson(`/auth/user/friends?n=100&offset=${offset}&offline=false&v=2`);
+  fetchFriendsPage(offset, offline = false) {
+    return this.fetchJson(`/auth/user/friends?n=${CONFIG.API_PAGE_SIZE}&offset=${offset}&offline=${offline ? 'true' : 'false'}${offline ? '' : '&v=2'}`);
+  }
+
+  // Reject partial results: callers may retain a same-account cache, while
+  // Favorite writes must only use a complete, validated live snapshot.
+  async fetchListPages(fetchPage, limit, validRow, keyFor) {
+    const result = [], seen = new Set();
+    let offset = 0;
+    for (let pageNumber = 0; pageNumber <= limit; pageNumber += 1) {
+      if (this.controller.signal.aborted) throw abortError();
+      const rows = await fetchPage(offset);
+      if (!Array.isArray(rows) || rows.some(row => !validRow(row))) {
+        throw new ApiError(200, t('一覧APIの応答形式が不正です。'));
+      }
+      if (!rows.length) return result;
+      let added = 0;
+      for (const row of rows) {
+        const key = keyFor(row);
+        if (!seen.has(key)) { seen.add(key); result.push(row); added += 1; }
+      }
+      if (!added) throw new ApiError(200, t('一覧APIが同じページを繰り返したため取得を停止しました。'));
+      if (result.length > limit) throw new ApiError(200, t('一覧取得の安全上限に達しました。'));
+      offset += rows.length;
+    }
+    throw new ApiError(200, t('一覧取得のページ上限に達しました。'));
   }
 
   async fetchFriends() {
-    const friends = [];
-    for (let offset = 0; offset < CONFIG.MAX_FRIENDS; offset += 100) {
-      const page = await this.fetchFriendsPage(offset);
-      const rows = Array.isArray(page) ? page : [];
-      friends.push(...rows);
-      if (rows.length < 100) break;
-    }
-    return dedupeById(friends).slice(0, CONFIG.MAX_FRIENDS);
+    return this.fetchListPages(offset => this.fetchFriendsPage(offset), CONFIG.MAX_FRIENDS,
+      row => row && typeof row.id === 'string' && row.id.startsWith('usr_')
+        && typeof row.displayName === 'string' && Boolean(row.displayName.trim()), row => row.id);
   }
 
   async fetchFavorites() {
-    const favorites = [];
-    for (let offset = 0; offset < CONFIG.MAX_FAVORITES; offset += 100) {
-      const page = await this.fetchJson(`/favorites?type=friend&n=100&offset=${offset}`);
-      const rows = Array.isArray(page) ? page : [];
-      favorites.push(...rows);
-      if (rows.length < 100) break;
-    }
+    const favorites = await this.fetchListPages(
+      offset => this.fetchJson(`/favorites?type=friend&n=${CONFIG.API_PAGE_SIZE}&offset=${offset}`),
+      CONFIG.MAX_FAVORITES,
+      row => row && typeof row.id === 'string' && row.id.startsWith('fvrt_')
+        && typeof row.favoriteId === 'string' && row.favoriteId.startsWith('usr_')
+        && Array.isArray(row.tags) && row.tags.every(tag => typeof tag === 'string'), row => row.id);
 
     const byFavoriteId = new Map();
     for (const item of favorites) {
@@ -112,6 +131,14 @@ export class VrchatApiClient {
 
   fetchFavoriteGroups() {
     return this.fetchJson('/favorite/groups?type=friend&n=100&offset=0');
+  }
+
+  renameFriendFavoriteGroup(userId, groupName, displayName) {
+    if (!/^usr_[A-Za-z0-9_-]+$/.test(userId) || !FRIEND_FAVORITE_GROUP_SLOTS.includes(groupName)) throw new Error('Invalid Favorite List.');
+    if (typeof displayName !== 'string' || !displayName.trim() || displayName.trim().length > CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH || /[\r\n\u0000]/.test(displayName)) throw new Error('Invalid Favorite List name.');
+    return this.fetchJson(`/favorite/group/friend/${groupName}/${encodeURIComponent(userId)}`, {
+      method: 'PUT', body: JSON.stringify({ displayName: displayName.trim() }),
+    });
   }
 
   addFriendFavorite(userId, tags) {
@@ -269,7 +296,7 @@ function favoriteCacheDataFromState(state) {
   };
 }
 
-function applyLocalFavoriteMutation(cached, { userId, groupName = '', remove = false, createdRecord = null } = {}) {
+function applyLocalFavoriteMutation(cached, { userId, groupName = '', tags: localTags = null, remove = false, createdRecord = null } = {}) {
   const state = favoriteStateFromCachedData(cached);
   if (!userId) return state;
 
@@ -284,15 +311,14 @@ function applyLocalFavoriteMutation(cached, { userId, groupName = '', remove = f
       : '';
     const tags = Array.isArray(createdRecord?.tags)
       ? createdRecord.tags.filter((tag) => FRIEND_FAVORITE_GROUP_SLOTS.includes(tag))
-      : [groupName];
-    const normalizedTags = tags.length ? [...new Set(tags)] : [groupName];
+      : (localTags || [groupName]);
+    const normalizedTags = tags.length ? [...new Set(tags)] : (localTags || [groupName]);
     state.records.set(userId, {
       favoriteId: userId,
       tags: normalizedTags,
       recordIds: recordId ? [recordId] : [],
     });
-    const group = state.groups.find((candidate) => candidate.name === groupName);
-    group?.memberIds.add(userId);
+    state.groups.forEach(group => { if (normalizedTags.includes(group.name)) group.memberIds.add(userId); });
   }
   return state;
 }
@@ -358,7 +384,7 @@ export class DataRepository {
     this.inflight.clear();
     for (const cache of [this.userDetailCache, this.instanceCache, this.worldCache, this.groupCache]) cache?.dispose();
     this.currentUserId = userId;
-    this.userDetailCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.USER_DETAIL_CACHE_KEY, userId), 500);
+    this.userDetailCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.USER_DETAIL_CACHE_KEY, userId), CONFIG.USER_DETAIL_CACHE_MAX_ENTRIES);
     this.instanceCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.INSTANCE_CACHE_KEY, userId), 200);
     this.worldCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.WORLD_CACHE_KEY, userId), 500);
     this.groupCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.GROUP_CACHE_KEY, userId), 300);
@@ -421,6 +447,8 @@ export class DataRepository {
         state: data?.state || '',
         platform: data?.platform || '',
         last_platform: data?.last_platform || '',
+        last_activity: typeof data?.last_activity === 'string' ? data.last_activity : '',
+        lastActivityCheckedAt: Date.now(),
       };
       this.userDetailCache.set(userId, normalized);
       return normalized;
@@ -472,6 +500,7 @@ export class DataRepository {
     try {
       const friends = await this.api.fetchFriends();
       this.friendCache.set(friends);
+      this.cacheFriendProfiles(friends);
       this.primaryDataUpdatedAt = Math.max(this.primaryDataUpdatedAt, Date.now());
       return friends;
     } catch (error) {
@@ -486,6 +515,64 @@ export class DataRepository {
       }
       throw error;
     }
+  }
+
+  cacheFriendProfiles(friends) {
+    this.requireCurrentUser();
+    for (const friend of friends) {
+      if (!friend?.id || typeof friend.displayName !== 'string' || !friend.displayName.trim()) continue;
+      const previous = this.cachedUserProfile(friend.id);
+      const profile = { ...previous, id: friend.id, displayName: friend.displayName, isFriend: true };
+      for (const key of ['username', 'iconUrl', 'userIcon', 'currentAvatarThumbnailImageUrl', 'profilePicOverride', 'imageUrl']) profile[key] = friend[key] || '';
+      profile.last_activity = typeof friend.last_activity === 'string' ? friend.last_activity : '';
+      profile.lastActivityCheckedAt = Date.now();
+      // Timestamp is display metadata. Current presence still comes from live IDs.
+      this.userDetailCache.set(friend.id, profile);
+    }
+  }
+
+  fetchOfflineFriendsPage(offset) {
+    this.requireCurrentUser();
+    if (!Number.isInteger(offset) || offset < 0) throw new Error('Invalid friend offset.');
+    return this.singleFlight('offlineFriendPage:' + offset, async () => {
+      const rows = await this.api.fetchFriendsPage(offset, true);
+      if (!Array.isArray(rows) || rows.some(row => !row || typeof row.id !== 'string' || !row.id.startsWith('usr_') || typeof row.displayName !== 'string' || !row.displayName.trim())) throw new ApiError(200, 'Invalid offline friend list');
+      return rows;
+    });
+  }
+
+  hasFreshOfflineActivity(userId) {
+    const profile = this.cachedUserProfile(userId);
+    return typeof profile?.last_activity === 'string' && Number.isFinite(profile.lastActivityCheckedAt)
+      && Date.now() - profile.lastActivityCheckedAt < CONFIG.OFFLINE_ACTIVITY_CACHE_TTL_MS;
+  }
+
+  isOfflineFriendUnavailable(userId) {
+    this.requireCurrentUser();
+    const record = this.userDetailCache.getRecord(userId, CONFIG.USER_DETAIL_CACHE_TTL_MS, CONFIG.OFFLINE_UNAVAILABLE_CACHE_TTL_MS);
+    return record?.status === 404 && record.data === null;
+  }
+
+  fetchOfflineFriendProfile(userId) {
+    this.requireCurrentUser();
+    if (typeof userId !== 'string' || !/^usr_[A-Za-z0-9_-]+$/.test(userId)) throw new Error('Invalid user ID.');
+    return this.singleFlight('offlineFriendProfile:' + userId, async () => {
+      if (this.isOfflineFriendUnavailable(userId)) throw new ApiError(404, 'Offline profile unavailable');
+      const cached = this.cachedUserProfile(userId);
+      if (typeof cached?.displayName === 'string' && cached.displayName.trim() && cached.displayName !== userId && this.hasFreshOfflineActivity(userId)) return cached;
+      let data;
+      try { data = await this.api.fetchUser(userId); }
+      catch (error) {
+        if (error?.status === 404) this.userDetailCache.setRecord(userId, null, { status: 404 });
+        throw error;
+      }
+      if (data?.id !== userId || typeof data.displayName !== 'string' || !data.displayName.trim() || data.displayName === userId) {
+        throw new ApiError(200, 'Invalid offline friend profile');
+      }
+      // Store only the same display metadata as the bulk list, never the full response.
+      this.cacheFriendProfiles([data]);
+      return this.cachedUserProfile(userId);
+    });
   }
 
   async fetchFavoritesStrict() {
@@ -539,14 +626,44 @@ export class DataRepository {
     }
   }
 
-  async setFriendFavoriteGroup(userId, groupName, currentRecord = null) {
+  async renameFriendFavoriteGroup(groupName, displayName) {
     this.requireCurrentUser();
+    const account = this.currentUserId;
+    const epoch = this.epoch;
+    const result = await this.api.renameFriendFavoriteGroup(account, groupName, displayName);
+    this.assertActive();
+    if (account !== this.currentUserId || epoch !== this.epoch) throw abortError();
+    let name = typeof result?.displayName === 'string' && result.displayName.trim()
+      ? result.displayName : displayName.trim();
+    let syncError = null;
+    try {
+      const groups = await this.api.fetchFavoriteGroups();
+      const group = Array.isArray(groups) ? groups.find(group => group.name === groupName && group.type === 'friend') : null;
+      if (typeof group?.displayName === 'string' && group.displayName.trim()) name = group.displayName;
+    } catch (error) { syncError = error; }
+    this.assertActive(epoch);
+    if (account !== this.currentUserId) throw abortError();
+    const favoriteState = favoriteStateFromCachedData(this.favoriteCache.getStaleRecord()?.data);
+    favoriteState.groups = favoriteState.groups.map(group => group.name === groupName ? { ...group, displayName: name } : group);
+    this.favoriteCache.set(favoriteCacheDataFromState(favoriteState));
+    return { favoriteState, syncFailed: Boolean(syncError), syncError };
+  }
+
+  setFriendFavoriteGroup(userId, groupName, currentRecord = null) {
     if (!FRIEND_FAVORITE_GROUP_SLOTS.includes(groupName)) throw new Error('Invalid Favorite List.');
+    return this.setFriendFavoriteTags(userId, [groupName], currentRecord);
+  }
+
+  async setFriendFavoriteTags(userId, tags, currentRecord = null) {
+    this.requireCurrentUser();
+    const targetTags = [...new Set(tags)];
+    if (!targetTags.length || targetTags.some(tag => !FRIEND_FAVORITE_GROUP_SLOTS.includes(tag))) throw new Error('Invalid Favorite List.');
+    const groupName = targetTags[0];
     const oldRecordIds = [...new Set(Array.isArray(currentRecord?.recordIds) ? currentRecord.recordIds : [])];
     const oldTags = [...new Set(Array.isArray(currentRecord?.tags)
       ? currentRecord.tags.filter((tag) => FRIEND_FAVORITE_GROUP_SLOTS.includes(tag))
       : [])];
-    if (oldTags.length === 1 && oldTags[0] === groupName && oldRecordIds.length) {
+    if (sameFavoriteTags(oldTags, targetTags) && oldRecordIds.length) {
       return { favoriteState: await this.fetchFavoritesStrict(), syncFailed: false, syncError: null };
     }
 
@@ -574,7 +691,7 @@ export class DataRepository {
 
     let createdRecord = null;
     try {
-      createdRecord = await this.api.addFriendFavorite(userId, [groupName]);
+      createdRecord = await this.api.addFriendFavorite(userId, targetTags);
     } catch (error) {
       if (error?.name === 'AbortError') throw error;
       if (error?.outcomeUnknown) { error.favoriteOutcomeUnknown = true; throw error; }
@@ -595,6 +712,7 @@ export class DataRepository {
     return this.syncFavoritesAfterMutation({
       userId,
       groupName,
+      tags: targetTags,
       remove: false,
       createdRecord,
     });
@@ -607,6 +725,29 @@ export class DataRepository {
     const userId = currentRecord?.favoriteId || '';
     for (const recordId of recordIds) await this.api.removeFavoriteRecord(recordId);
     return this.syncFavoritesAfterMutation({ userId, remove: true });
+  }
+
+  async restoreFriendFavorite(userId, previousTags, expectedTags) {
+    this.requireCurrentUser();
+    // Read live membership before writing: another Viewer or the official site
+    // may have changed this friend after the action offered for undo.
+    const live = await this.fetchFavoritesStrict();
+    const current = live.records.get(userId) || null;
+    if (!sameFavoriteTags(current?.tags || [], expectedTags)) {
+      const error = new Error('Favorite was changed elsewhere.');
+      error.favoriteConflict = true;
+      error.favoriteState = live;
+      throw error;
+    }
+    if (!previousTags.length) return current
+      ? this.removeFriendFavorite(current)
+      : { favoriteState: live, syncFailed: false, syncError: null };
+    return this.setFriendFavoriteTags(userId, previousTags, current);
+  }
+
+  cachedUserProfile(userId) {
+    this.requireCurrentUser();
+    return this.userDetailCache.getRecord(userId, CONFIG.USER_DETAIL_CACHE_TTL_MS, CONFIG.GROUP_FAILURE_CACHE_TTL_MS)?.data || null;
   }
 
   async inviteMyselfTo(location) {
@@ -714,4 +855,10 @@ function dedupeById(items) {
     seen.add(id);
     return true;
   });
+}
+
+function sameFavoriteTags(a, b) {
+  const left = [...new Set(a)].sort();
+  const right = [...new Set(b)].sort();
+  return left.length === right.length && left.every((tag, index) => tag === right[index]);
 }

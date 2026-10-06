@@ -65,7 +65,15 @@ async function handleApiFetch(message) {
   if (!isAllowedApiUrl(message?.url)) return { ok: false, status: 400, text: '' };
   const method = String(message.method || 'GET').toUpperCase();
   // Only methods used by this extension; no arbitrary header forwarding.
-  if (!['GET', 'POST', 'DELETE'].includes(method)) return { ok: false, status: 400, text: '' };
+  if (!['GET', 'POST', 'DELETE', 'PUT'].includes(method)) return { ok: false, status: 400, text: '' };
+  if (method === 'PUT') {
+    const url = new URL(message.url);
+    let body;
+    try { body = JSON.parse(message.body); } catch { return { ok: false, status: 400, text: '' }; }
+    if (url.search || !/^\/api\/1\/favorite\/group\/friend\/group_[012]\/usr_[A-Za-z0-9_-]+$/.test(url.pathname)
+      || !body || Object.keys(body).length !== 1 || typeof body.displayName !== 'string'
+      || !body.displayName.trim() || body.displayName.trim().length > CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH || /[\r\n\u0000]/.test(body.displayName)) return { ok: false, status: 400, text: '' };
+  }
   const key = method === 'GET' ? message.url : '';
   if (key && pendingGets.has(key)) return pendingGets.get(key);
   const task = performApiFetch(message, method);

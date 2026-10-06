@@ -1,5 +1,10 @@
+import { SidebarResizer } from './sidebar-resize.js';
+import { t, lt, captureStaticLabels, setLocale, getLocale, relocalize, initialLanguage } from './i18n.js';
+import { normalizeSearch, friendSearchText, matchesSearch, activityComparison } from './view-query.js';
+import { ActionToast } from './toast.js';
 import { patchElement, patchMarkup } from './dom.js';
 import { ImagePool, ImageController } from './images.js';
+import { formatActivityDateTime, uiText } from './ui-format.js';
 import { CONFIG, PERMISSIONS, SORTS, TABS } from './config.js';
 import { JsonStorage } from './storage.js';
 import { DataRepository, VrchatApiClient } from './api.js';
@@ -48,7 +53,10 @@ const elements = {
   clearFriendSearch: document.getElementById('clearFriendSearch'),
   friendFilter: document.getElementById('friendFilter'),
   showOnWebsite: document.getElementById('showOnWebsite'),
+  showOffline: document.getElementById('showOffline'),
+  offlineSearchStatus: document.getElementById('offlineSearchStatus'),
   sort: document.getElementById('sort'),
+  offlineSort: document.getElementById('offlineSort'),
   settingsButton: document.getElementById('settingsButton'),
   settingsPanel: document.getElementById('settingsPanel'),
   friendSort: document.getElementById('friendSort'),
@@ -89,23 +97,30 @@ const state = {
   instanceSize: 'medium',
   instanceDisplay: 'normal',
   friendSort: 'favorite_list',
+  offlineSort: 'name',
+  displayLimits: new Map(),
   theme: 'dark-blue',
   autoRefreshMinutes: 0,
   autoRefreshTimer: null,
   sidebarMode: 'normal',
-  toastTimer: null,
   user: null,
   favorites: new Set(),
   favoriteRecords: new Map(),
   favoriteGroups: [],
   requestedFriendFilter: 'favorite',
   friends: [],
+  onlineFriends: [],
+  offlineProfiles: new Map(),
+  offlineLoadToken: 0,
+  offlineNameLoad: { loading: false, failed: false, loaded: 0, total: 0 },
+  favoriteUndo: null,
   friendIndex: new Map(),
   instances: [],
   loading: false,
   loadGeneration: 0,
   autoRefreshDueAt: 0,
   favoriteMutationPending: false,
+  favoriteGroupEditor: null,
   pendingInvites: new Set(),
   highlight: {
     location: '',
@@ -115,7 +130,7 @@ const state = {
   },
   dataFromCache: false,
   lastLoadedAt: 0,
-  collapsedFriendGroups: new Set(['ungrouped']),
+  collapsedFriendGroups: new Set(['ungrouped', 'ungrouped-offline']),
   privateCollapsed: true,
   friendPreview: {
     openTimer: null,
@@ -136,6 +151,13 @@ const state = {
 };
 
 let sidebarHydrationObserver = null;
+const sidebarResizer = new SidebarResizer({
+  sidebar: document.getElementById('friendSidebar'),
+  handle: document.getElementById('sidebarResizer'),
+  getMode: () => state.sidebarMode,
+  onStart: () => { hideFriendInstancePreview({ immediate: true }); closeFavoriteMenu(); },
+  onCommit: () => persistUiPreferences(),
+});
 
 function readUiPreferences() {
   const prefs = uiStorage.get(CONFIG.UI_PREFERENCES_KEY, {});
@@ -144,6 +166,7 @@ function readUiPreferences() {
 
 function persistUiPreferences() {
   uiStorage.set(CONFIG.UI_PREFERENCES_KEY, {
+    language: getLocale(),
     viewMode: state.viewMode,
     tab: state.tab,
     sort: state.sort,
@@ -151,17 +174,23 @@ function persistUiPreferences() {
     instanceSize: state.instanceSize,
     instanceDisplay: state.instanceDisplay,
     friendSort: state.friendSort,
+    offlineSort: state.offlineSort,
     theme: state.theme,
     autoRefreshMinutes: state.autoRefreshMinutes,
+    sidebarWidths: sidebarResizer.preferences(),
     sidebarMode: state.sidebarMode,
     sidebarCollapsed: state.sidebarMode === 'hidden',
     friendFilter: elements.friendFilter?.value || 'all',
     showOnWebsite: elements.showOnWebsite?.checked !== false,
+    showOffline: elements.showOffline?.checked === true,
   });
 }
 
 function restoreUiPreferences() {
   const prefs = readUiPreferences();
+  setLocale(initialLanguage(prefs.language));
+  sidebarResizer.restore(prefs.sidebarWidths);
+  document.getElementById('language').value = getLocale();
   state.viewMode = Object.values(VIEW_MODES).includes(prefs.viewMode)
     ? prefs.viewMode
     : VIEW_MODES.INSTANCES;
@@ -182,7 +211,7 @@ function restoreUiPreferences() {
   state.theme = ['light', 'ash', 'dark-blue', 'dark'].includes(prefs.theme)
     ? prefs.theme
     : 'dark-blue';
-  state.autoRefreshMinutes = [10, 30].includes(Number(prefs.autoRefreshMinutes))
+  state.autoRefreshMinutes = [5, 10, 30].includes(Number(prefs.autoRefreshMinutes))
     ? Number(prefs.autoRefreshMinutes)
     : 0;
   state.sidebarMode = ['normal', 'location', 'hidden'].includes(prefs.sidebarMode)
@@ -190,6 +219,8 @@ function restoreUiPreferences() {
     : prefs.sidebarCollapsed === true
       ? 'hidden'
       : 'normal';
+  state.offlineSort = ['name', 'recent', 'oldest'].includes(prefs.offlineSort) ? prefs.offlineSort : 'name';
+  if (elements.offlineSort) elements.offlineSort.value = state.offlineSort;
   applyInstanceSize();
   applyInstanceDisplay();
   applyTheme();
@@ -214,6 +245,7 @@ function restoreUiPreferences() {
       ? prefs.showOnWebsite
       : false;
   }
+  if (elements.showOffline) elements.showOffline.checked = typeof prefs.showOffline === 'boolean' ? prefs.showOffline : prefs.showOfflineFavorites === true;
   applyMainSortOptions();
 }
 
@@ -271,14 +303,15 @@ function applySidebarMode() {
   const location = mode === 'location';
   document.body.classList.toggle('sidebar-collapsed', hidden);
   document.body.classList.toggle('sidebar-location-mode', location);
+  sidebarResizer.apply();
   if (!elements.sidebarToggle) return;
   elements.sidebarToggle.textContent = hidden ? '›' : location ? '‹' : '»';
   elements.sidebarToggle.setAttribute('aria-expanded', String(!hidden));
   const label = hidden
-    ? 'フレンド一覧を表示'
+    ? t('フレンド一覧を表示')
     : location
-      ? 'フレンド一覧を隠す'
-      : '今居るインスタンスも表示';
+      ? t('フレンド一覧を隠す')
+      : t('今居るインスタンスも表示');
   elements.sidebarToggle.setAttribute('aria-label', label);
   elements.sidebarToggle.title = label;
   elements.sidebarToggle.dataset.sidebarMode = mode;
@@ -297,10 +330,23 @@ function toggleFriendSidebar() {
   persistUiPreferences();
 }
 
+function positionSettingsPanel() {
+  if (!elements.settingsPanel || elements.settingsPanel.classList.contains('hidden')) return;
+  const button = elements.settingsButton.getBoundingClientRect();
+  const scale = button.width / elements.settingsButton.offsetWidth || 1;
+  const margin = 12;
+  elements.settingsPanel.style.width = `${Math.min(350, (window.innerWidth - margin * 2) / scale)}px`;
+  elements.settingsPanel.style.right = `${margin / scale}px`;
+  const top = Math.min(button.bottom + 7 * scale, window.innerHeight - 80);
+  elements.settingsPanel.style.top = `${Math.max(margin, top) / scale}px`;
+  elements.settingsPanel.style.maxHeight = `${(window.innerHeight - Math.max(margin, top) - margin) / scale}px`;
+}
+window.addEventListener('resize', positionSettingsPanel);
 function setSettingsPanelOpen(open) {
   if (!elements.settingsPanel || !elements.settingsButton) return;
   elements.settingsPanel.classList.toggle('hidden', !open);
   elements.settingsButton.setAttribute('aria-expanded', String(open));
+  if (open) positionSettingsPanel();
 }
 
 function toggleSettingsPanel() {
@@ -316,14 +362,15 @@ function clearAutoRefreshTimer() {
 
 function scheduleAutoRefresh({ preserveDue = false } = {}) {
   clearAutoRefreshTimer();
-  if (![10, 30].includes(state.autoRefreshMinutes)) { state.autoRefreshDueAt = 0; return; }
+  if (![5, 10, 30].includes(state.autoRefreshMinutes)) { state.autoRefreshDueAt = 0; return; }
   if (!preserveDue || !state.autoRefreshDueAt) state.autoRefreshDueAt = Date.now() + state.autoRefreshMinutes * 60000;
   if (document.hidden) return;
   const delayMs = Math.max(0, state.autoRefreshDueAt - Date.now());
   state.autoRefreshTimer = setTimeout(async () => {
     state.autoRefreshTimer = null;
     if (document.hidden) return;
-    if (state.loading || state.favoriteMutationPending || state.pendingInvites.size) {
+    if (state.loading || state.favoriteMutationPending || state.pendingInvites.size
+      || (state.viewMode === VIEW_MODES.FRIENDS && state.favoriteGroupEditor)) {
       state.autoRefreshDueAt = Date.now() + 1000;
       scheduleAutoRefresh({ preserveDue: true });
       return;
@@ -345,6 +392,154 @@ function setFriendState(friends) {
   state.friendIndex = new Map(state.friends.map((friend) => [friend.id, friend]));
 }
 
+function offlineFriendIds() {
+  if (!elements.showOffline?.checked || !state.user || !Array.isArray(state.user.offlineFriends)) return [];
+  const online = new Set(state.onlineFriends.map(friend => friend.id));
+  for (const id of [...(state.user.onlineFriends || []), ...(state.user.activeFriends || [])]) online.add(id);
+  return [...new Set(state.user.offlineFriends)].filter(id => typeof id === 'string' && /^usr_[A-Za-z0-9_-]+$/.test(id) && !online.has(id));
+}
+
+function cachedOfflineProfile(id) {
+  return !repository.disposed && repository.currentUserId === state.user?.id ? repository.cachedUserProfile(id) : null;
+}
+
+function isOfflineUnavailable(id) {
+  return !repository.disposed && repository.currentUserId === state.user?.id && repository.isOfflineFriendUnavailable(id);
+}
+
+function rebuildDisplayedFriends() {
+  const offline = offlineFriendIds().filter(id => !isOfflineUnavailable(id) && hasOfflineName(id)).map(id => {
+    const profile = state.offlineProfiles.get(id) || cachedOfflineProfile(id);
+    return { ...profile, id, displayName: profile?.displayName || (state.offlineNameLoad.failed ? t('名前を取得できませんでした') : t('ユーザー情報を取得中…')),
+      status: 'offline', state: 'offline', platform: '', location: 'offline', travelingToLocation: '', isFriend: true };
+  });
+  setFriendState([...state.onlineFriends, ...offline]);
+}
+
+function renderOfflineSearchStatus() {
+  const root = elements.offlineSearchStatus;
+  if (!root) return;
+  const progress = state.offlineNameLoad;
+  root.hidden = !elements.showOffline?.checked || !progress.failed;
+  root.classList.toggle('error', progress.failed);
+  root.textContent = progress.failed
+    ? t('一部のOffline情報を取得できませんでした。「更新」で再試行してください。')
+    : '';
+}
+
+async function loadOfflineFriendProfiles() {
+  const token = ++state.offlineLoadToken;
+  const generation = state.loadGeneration;
+  const dataRepository = repository;
+  if (!elements.showOffline?.checked || !state.user || state.loading || dataRepository.disposed || document.hidden) return;
+  if (!Array.isArray(state.user.offlineFriends)) {
+    state.offlineNameLoad = { loading: false, failed: true, loaded: 0, total: 0 };
+    renderOfflineSearchStatus();
+    return;
+  }
+  const ids = offlineFriendIds();
+  const targets = new Set(ids);
+  const unavailable = new Set(ids.filter(id => isOfflineUnavailable(id)));
+  const missing = new Set(ids.filter(id => (!hasOfflineName(id) || !dataRepository.hasFreshOfflineActivity(id)) && !unavailable.has(id)));
+  const current = () => token === state.offlineLoadToken && generation === state.loadGeneration && !dataRepository.disposed && elements.showOffline?.checked && !document.hidden;
+  state.offlineNameLoad = { loading: missing.size > 0, failed: false, loaded: ids.length - missing.size - unavailable.size, total: ids.length, unavailable: unavailable.size };
+  renderOfflineSearchStatus();
+  if (!missing.size) { rebuildDisplayedFriends(); render({ resetScroll: false }); return; }
+  // Metadata pages include names and image URLs, never image bodies. Pagination
+  // is independent of folded cards so name searches cover all offline friends.
+  // Servers may cap a page below the requested size. Advance by the actual
+  // count and finish on an empty page, not on a short page.
+  const maxPages = Math.max(100, ids.length + 2);
+  const seenIds = new Set();
+  let offset = 0, pages = 0, lastCount = 0, stopReason = 'page-limit';
+  let fallbackAttempted = 0, fallbackRecovered = 0, fallbackUnavailable = 0, fallbackFailed = 0;
+  const fallbackStatuses = {};
+  const reportIncomplete = (status = null) => {
+    if (missing.size) console.warn('[Viewer] Offline metadata incomplete', {
+      total: ids.length, loaded: ids.length - missing.size - unavailable.size, unavailable: unavailable.size, pages, offset,
+      lastCount, stopReason, status, fallbackAttempted, fallbackRecovered,
+      fallbackUnavailable, fallbackFailed, fallbackStatuses
+    });
+  };
+  try {
+    for (let page = 0; page < maxPages && missing.size && current(); page += 1) {
+      const rows = await dataRepository.fetchOfflineFriendsPage(offset);
+      pages += 1; lastCount = rows.length;
+      if (!current()) return;
+      const profiles = rows.filter(friend => targets.has(friend?.id) && typeof friend.displayName === 'string' && friend.displayName.trim());
+      dataRepository.cacheFriendProfiles(profiles);
+      for (const friend of profiles) {
+        state.offlineProfiles.set(friend.id, dataRepository.cachedUserProfile(friend.id));
+        missing.delete(friend.id); unavailable.delete(friend.id);
+      }
+      state.offlineNameLoad.unavailable = unavailable.size;
+      state.offlineNameLoad.loaded = ids.length - missing.size - unavailable.size;
+      rebuildDisplayedFriends();
+      render({ resetScroll: false });
+      if (!rows.length) { stopReason = 'empty-page'; break; }
+      offset += rows.length;
+      let newIds = 0;
+      for (const row of rows) {
+        if (typeof row?.id === 'string' && !seenIds.has(row.id)) {
+          seenIds.add(row.id); newIds += 1;
+        }
+      }
+      // Stop a server repeating the same page instead of issuing unbounded requests.
+      if (!newIds && missing.size) { stopReason = 'repeated-page'; break; }
+    }
+    if (!current()) return;
+    // Lists and auth IDs are separate snapshots. Only repair a small remainder;
+    // never turn a broken bulk response into hundreds of profile requests.
+    if (missing.size && missing.size <= CONFIG.OFFLINE_PROFILE_FALLBACK_MAX) {
+      for (const id of [...missing]) {
+        if (!current()) return;
+        fallbackAttempted += 1;
+        try {
+          const profile = await dataRepository.fetchOfflineFriendProfile(id);
+          if (!current()) return;
+          state.offlineProfiles.set(id, profile);
+          missing.delete(id); fallbackRecovered += 1;
+          state.offlineNameLoad.loaded = ids.length - missing.size - unavailable.size;
+          rebuildDisplayedFriends(); render({ resetScroll: false });
+        } catch (error) {
+          if (!current() || error?.name === 'AbortError') return;
+          if (error?.status === 401) { handleSessionExpired(); return; }
+          const status = String(error?.status ?? 'network');
+          fallbackStatuses[status] = (fallbackStatuses[status] || 0) + 1;
+          if (error?.status === 404) {
+            fallbackUnavailable += 1; unavailable.add(id); missing.delete(id);
+            state.offlineNameLoad.unavailable = unavailable.size;
+            state.offlineNameLoad.loaded = ids.length - missing.size - unavailable.size;
+            rebuildDisplayedFriends(); render({ resetScroll: false });
+          } else if (error?.status === 403) fallbackUnavailable += 1;
+          else { fallbackFailed += 1; break; }
+        }
+      }
+    }
+    if (!current()) return;
+    state.offlineNameLoad.loading = false;
+    // Confirmed 404 IDs are separate from recoverable missing names; retain
+    // their Favorite records without presenting them as accessible friends.
+    state.offlineNameLoad.failed = missing.size > 0;
+    reportIncomplete();
+    rebuildDisplayedFriends();
+    render({ resetScroll: false });
+  } catch (error) {
+    if (!current() || error?.name === 'AbortError') return;
+    if (error?.status === 401) { handleSessionExpired(); return; }
+    state.offlineNameLoad.loading = false;
+    state.offlineNameLoad.failed = true;
+    stopReason = 'request-error'; reportIncomplete(error?.status ?? null);
+    rebuildDisplayedFriends();
+    render({ resetScroll: false });
+  }
+}
+
+function hasOfflineName(id) {
+  const profile = state.offlineProfiles.get(id) || cachedOfflineProfile(id);
+  return typeof profile?.displayName === 'string' && Boolean(profile.displayName.trim()) && profile.displayName !== id;
+}
+
 function setFavoriteGroupState(groups) {
   state.favoriteGroups = Array.isArray(groups) ? groups.slice(0, 3) : [];
   renderFriendFilterOptions();
@@ -354,6 +549,7 @@ function applyFavoriteState(favoriteState) {
   state.favorites = favoriteState?.ids instanceof Set ? favoriteState.ids : new Set();
   state.favoriteRecords = favoriteState?.records instanceof Map ? favoriteState.records : new Map();
   setFavoriteGroupState(favoriteState?.groups || []);
+  rebuildDisplayedFriends();
 }
 
 function favoriteGroupForUser(userId) {
@@ -363,7 +559,7 @@ function favoriteGroupForUser(userId) {
 function renderFavoriteActionButton(userId, extraClass = '') {
   if (!userId || !state.friendIndex.has(userId)) return '';
   const isFavorite = state.favorites.has(userId);
-  const label = isFavorite ? 'Favoriteを編集' : 'Favoriteに追加';
+  const label = isFavorite ? t('Favoriteを編集') : t('Favoriteに追加');
   return `<button class="favorite-action-button favorite-badge${isFavorite ? ' is-favorite' : ''}${extraClass ? ` ${extraClass}` : ''}" type="button" data-favorite-user-id="${escapeHtml(userId)}" aria-label="${label}" title="${label}"><span class="favorite-action-symbol" aria-hidden="true">${isFavorite ? '★' : ''}</span></button>`;
 }
 
@@ -378,7 +574,7 @@ function renderFriendFilterOptions() {
     return `<option value="favorite-group:${escapeHtml(name)}">${escapeHtml(label)}</option>`;
   }).join('');
 
-  elements.friendFilter.innerHTML = `
+  elements.friendFilter.innerHTML = lt`
     <option value="all">すべて</option>
     <option value="favorite">Favorite</option>
     ${groupOptions}
@@ -402,56 +598,28 @@ function setStatus(message, error = false) {
   elements.statusRow?.classList.toggle('hidden', !text);
 }
 
-function clearActionToastTimer() {
-  if (!state.toastTimer) return;
-  clearTimeout(state.toastTimer);
-  state.toastTimer = null;
-}
-
-function hideActionToast() {
-  clearActionToastTimer();
-  if (!elements.actionToast) return;
-  elements.actionToast.classList.remove('is-visible', 'error');
-  elements.actionToast.textContent = '';
-}
-
-function showActionToast(message, { error = false, delay = 2800 } = {}) {
-  if (!elements.actionToast) return;
-  clearActionToastTimer();
-  const text = String(message || '').trim();
-  if (!text) {
-    hideActionToast();
-    return;
-  }
-  elements.actionToast.textContent = text;
-  elements.actionToast.classList.toggle('error', Boolean(error));
-  elements.actionToast.classList.add('is-visible');
-  if (delay > 0) {
-    state.toastTimer = window.setTimeout(() => {
-      state.toastTimer = null;
-      if (elements.actionToast?.textContent === text) hideActionToast();
-    }, delay);
-  }
-}
+const actionToast = new ActionToast(elements.actionToast);
+function hideActionToast() { actionToast.dismiss(); state.favoriteUndo = null; }
+function showActionToast(message, options = {}) { actionToast.show(message, options); }
 
 function applyMainSortOptions() {
   if (!elements.sort) return;
   if (state.viewMode === VIEW_MODES.FRIENDS) {
-    elements.sort.innerHTML = `
+    elements.sort.innerHTML = lt`
       <option value="name">名前順</option>
       <option value="location">居場所順</option>`;
     elements.sort.value = Object.values(FRIEND_VIEW_SORTS).includes(state.friendViewSort)
       ? state.friendViewSort
       : FRIEND_VIEW_SORTS.NAME;
-    elements.sort.setAttribute('aria-label', 'フレンド表示の並び順');
+    elements.sort.setAttribute('aria-label', t('フレンド表示の並び順'));
   } else {
-    elements.sort.innerHTML = `
+    elements.sort.innerHTML = lt`
       <option value="friends_desc">フレンドが多い順</option>
       <option value="users_desc">参加人数が多い順</option>`;
     elements.sort.value = Object.values(SORTS).includes(state.sort)
       ? state.sort
       : SORTS.FRIENDS_DESC;
-    elements.sort.setAttribute('aria-label', 'インスタンスの並び順');
+    elements.sort.setAttribute('aria-label', t('インスタンスの並び順'));
   }
 }
 
@@ -514,11 +682,25 @@ function compareFriendNames(a, b) {
   return friendSortName(a).localeCompare(friendSortName(b), 'ja');
 }
 
+function compareOfflineFriends(a, b) {
+  if (state.offlineSort === 'name') return 0;
+  const onlineA = friendIsOnline(a), onlineB = friendIsOnline(b);
+  if (onlineA !== onlineB) return onlineA ? -1 : 1;
+  if (onlineA) return 0;
+  return activityComparison(a, b, state.offlineSort);
+}
+function limitedMarkup(rows, key, renderer) {
+  const limit = state.displayLimits.get(key) || CONFIG.DISPLAY_BATCH_SIZE;
+  const markup = rows.slice(0, limit).map(renderer).join('');
+  return markup + (rows.length > limit ? lt`<button type="button" class="load-more" data-load-more="${escapeHtml(key)}">さらに${Math.min(CONFIG.DISPLAY_BATCH_SIZE, rows.length - limit)}人表示（${limit} / ${rows.length}）</button>` : '');
+}
+function resetDisplayLimits() { state.displayLimits.clear(); }
 function getFriendSidebarRows() {
   const filter = elements.friendFilter?.value || 'all';
-  const query = String(elements.friendSearch?.value || '').trim().toLocaleLowerCase('ja-JP');
+  const query = normalizeSearch(elements.friendSearch?.value);
 
   const filtered = state.friends.filter((friend) => {
+    if (!friendIsOnline(friend) && !elements.showOffline?.checked) return false;
     if (!elements.showOnWebsite?.checked && onlineStatusInfo(friend).className === 'online-website') {
       return false;
     }
@@ -541,11 +723,7 @@ function getFriendSidebarRows() {
     }
 
     if (!query) return true;
-    const haystack = [friend.displayName, friend.username, friend.id]
-      .filter(Boolean)
-      .join(' ')
-      .toLocaleLowerCase('ja-JP');
-    return haystack.includes(query);
+    return matchesSearch(friendSearchText(friend), query);
   });
 
   if (state.friendSort === 'favorite_list') {
@@ -564,7 +742,7 @@ function getFriendSidebarRows() {
     return filtered.sort((a, b) => {
       const rankDifference = favoriteListRank(a) - favoriteListRank(b);
       if (rankDifference) return rankDifference;
-      return compareFriendNames(a, b);
+      return compareOfflineFriends(a, b) || compareFriendNames(a, b);
     });
   }
 
@@ -572,11 +750,11 @@ function getFriendSidebarRows() {
     return filtered.sort((a, b) => {
       const favoriteDifference = Number(state.favorites.has(b.id)) - Number(state.favorites.has(a.id));
       if (favoriteDifference) return favoriteDifference;
-      return compareFriendNames(a, b);
+      return compareOfflineFriends(a, b) || compareFriendNames(a, b);
     });
   }
 
-  return filtered.sort(compareFriendNames);
+  return filtered.sort((a, b) => compareOfflineFriends(a, b) || compareFriendNames(a, b));
 }
 
 const imageFallbacks = new Map();
@@ -642,7 +820,7 @@ function renderFriendSidebarLocationThumbnail(friend) {
       ${thumbContent}
       <div class="friend-sidebar-location-meta">
         <span class="friend-state friend-sidebar-location-status ${permissionClass}">${escapeHtml(statusText)}</span>
-        ${countText ? `<span class="friend-sidebar-location-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(countText)}</span>` : ''}
+        ${countText ? lt`<span class="friend-sidebar-location-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(countText)}</span>` : ''}
       </div>
       <div class="friend-sidebar-location-title">${escapeHtml(locationTitle)}</div>
     </div>`;
@@ -667,10 +845,10 @@ function renderFriendSidebarItem(friend) {
   const loadingClass = showLocation && entry && needsHydration(entry)
     ? ' friend-sidebar-location-loading'
     : '';
-  const noPreviewClass = isWebsite || isPrivate ? ' friend-sidebar-no-preview' : '';
+  const noPreviewClass = !friendIsOnline(friend) || isWebsite || isPrivate ? ' friend-sidebar-no-preview' : '';
 
   return `
-    <div class="friend-item${loadingClass}${noPreviewClass}" data-friend-id="${escapeHtml(friend.id)}"${locationData} tabindex="0" role="button" aria-label="${escapeHtml(name)}">
+    <div class="friend-item${loadingClass}${noPreviewClass}${!friendIsOnline(friend) ? ' friend-offline' : ''}" data-friend-id="${escapeHtml(friend.id)}"${locationData} tabindex="0" role="button" aria-label="${escapeHtml(name)}">
       <div class="friend-avatar-wrap">
         ${avatar}
         ${renderFavoriteActionButton(friend.id)}
@@ -740,19 +918,23 @@ function scheduleSidebarHydrationSync() {
 }
 
 function renderFriendSidebar() {
+  renderOfflineSearchStatus();
   if (!elements.friendList || !elements.friendCount) return;
   disconnectSidebarHydrationObserver();
   const previousScroll = elements.friendList.scrollTop;
   const rows = getFriendSidebarRows();
 
   const visibleCount = rows.length;
-  const onlineFriendCount = state.friends.length;
-  elements.friendCount.textContent = `${visibleCount} / ${onlineFriendCount}`;
+  const onlineFriendCount = state.onlineFriends.length;
+  const offlineCount = state.friends.length - onlineFriendCount;
+  const totalCount = onlineFriendCount + offlineCount;
+  elements.friendCount.textContent = `${visibleCount} / ${totalCount}`;
   elements.friendCount.setAttribute(
     'aria-label',
-    `表示中 ${visibleCount}人 / オンラインフレンド総数 ${onlineFriendCount}人`,
+    lt`該当 ${visibleCount}人 / オンライン ${onlineFriendCount}人・Offline ${offlineCount}人`,
   );
-  patchMarkup(elements.friendList, rows.map(renderFriendSidebarItem).join(''));
+  elements.friendCount.title = lt`該当人数 / 表示対象総数（オンライン ${onlineFriendCount}人・Offline ${offlineCount}人）`;
+  patchMarkup(elements.friendList, limitedMarkup(rows, 'sidebar', renderFriendSidebarItem));
   if (state.friendPreview.anchor?.classList.contains('friend-item')) validateFriendInstancePreview();
   elements.friendList.scrollTop = previousScroll;
   scheduleSidebarHydrationSync();
@@ -803,13 +985,14 @@ function reverseEntryForFriend(friend) {
 
 function friendLocationLabel(friend, entry = reverseEntryForFriend(friend)) {
   const status = onlineStatusInfo(friend);
+  if (!friendIsOnline(friend)) return 'Offline';
   if (status.className === 'online-website') return 'Other Platform';
   const location = resolveFriendLocation(friend);
   const permission = entry?.permission || classifyPermission(location);
   if (permission === PERMISSIONS.PRIVATE || location === 'private') return 'Private';
   const worldName = entry?.world?.name || entry?.instanceData?.world?.name || '';
   if (worldName) return worldName;
-  if (entry?.worldId && entry.worldId !== 'offline' && entry.worldId !== 'private') return 'ワールド情報を取得中…';
+  if (entry?.worldId && entry.worldId !== 'offline' && entry.worldId !== 'private') return t('ワールド情報を取得中…');
   return permissionLabel(permission);
 }
 
@@ -819,8 +1002,8 @@ function friendLocationSortKey(friend) {
   const location = resolveFriendLocation(friend);
   const permission = entry?.permission || classifyPermission(location);
 
-  // 居場所順は、通常インスタンスをワールド名順で先に表示し、
-  // その後に Private、最後に Other Platform を並べる。
+  // Instances, Private, Other Platform, then Offline.
+  if (!friendIsOnline(friend)) return '3\u0000Offline';
   if (status.className === 'online-website') {
     return '2\u0000Other Platform';
   }
@@ -835,15 +1018,15 @@ function friendLocationSortKey(friend) {
 function sortReverseFriends(friends) {
   const rows = [...(friends || [])];
   if (state.friendViewSort === FRIEND_VIEW_SORTS.LOCATION) {
-    return rows.sort((a, b) => friendLocationSortKey(a).localeCompare(friendLocationSortKey(b), 'ja') || compareFriendNames(a, b));
+    return rows.sort((a, b) => friendLocationSortKey(a).localeCompare(friendLocationSortKey(b), 'ja') || compareOfflineFriends(a, b) || compareFriendNames(a, b));
   }
-  return rows.sort(compareFriendNames);
+  return rows.sort((a, b) => compareOfflineFriends(a, b) || compareFriendNames(a, b));
 }
 
 function getReverseFriendGroups() {
   const showOtherPlatform = elements.showOnWebsite?.checked !== false;
   const onlineFriends = state.friends.filter((friend) => {
-    if (!friendIsOnline(friend)) return false;
+    if (!friendIsOnline(friend) && !elements.showOffline?.checked) return false;
     if (!showOtherPlatform && onlineStatusInfo(friend).className === 'online-website') return false;
     return true;
   });
@@ -857,7 +1040,7 @@ function getReverseFriendGroups() {
       friends: [],
     };
   });
-  const ungrouped = { id: 'ungrouped', label: 'その他', memberIds: new Set(), friends: [] };
+  const ungrouped = { id: 'ungrouped', label: t('その他'), memberIds: new Set(), friends: [] };
 
   // A friend can theoretically appear in more than one Favorite List. To keep
   // the reverse view duplicate-free, use the first/highest Favorite List just
@@ -903,7 +1086,7 @@ function renderFriendLocationItem(friend) {
     : '<div class="friend-location-avatar friend-location-avatar-empty"></div>';
   const profileUrl = CONFIG.DEBUG_MODE ? '' : buildUserProfileUrl(friend.id);
   const avatarContent = profileUrl
-    ? `<a class="friend-location-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${avatar}</a>`
+    ? lt`<a class="friend-location-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${avatar}</a>`
     : avatar;
 
   const worldName = friendLocationLabel(friend, entry);
@@ -937,27 +1120,32 @@ function renderFriendLocationItem(friend) {
   const thumbOverlay = `
     <div class="friend-location-thumb-simple-meta">
       <span class="friend-state friend-location-thumb-simple-status ${permissionClass}">${escapeHtml(simpleStatusText)}</span>
-      ${simpleCountText ? `<span class="friend-location-thumb-simple-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(simpleCountText)}</span>` : ''}
+      ${simpleCountText ? lt`<span class="friend-location-thumb-simple-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(simpleCountText)}</span>` : ''}
     </div>
     <div class="friend-location-thumb-simple-title" title="${escapeHtml(locationTitle)}">${escapeHtml(locationTitle)}</div>`;
   const thumbWrapped = worldUrl
-    ? `<a class="friend-location-thumb-link" href="${escapeHtml(worldUrl)}" target="_blank" rel="noopener noreferrer" title="ワールドページを開く">${thumbContent}${thumbOverlay}</a>`
+    ? lt`<a class="friend-location-thumb-link" href="${escapeHtml(worldUrl)}" target="_blank" rel="noopener noreferrer" title="ワールドページを開く">${thumbContent}${thumbOverlay}</a>`
     : `<div class="friend-location-thumb-link">${thumbContent}${thumbOverlay}</div>`;
 
   const locationMeta = isWebsite
     ? `<span class="friend-state friend-location-permission ${permissionClass}">Other Platform</span>`
     : isPrivate
       ? `<span class="friend-state friend-location-permission ${permissionClass}">Private</span>`
-      : `<span class="friend-state friend-location-permission ${permissionClass}">${escapeHtml(permissionLabel(permission))}</span>${region ? `<span class="friend-location-region">${escapeHtml(region)}</span>` : ''}${countText ? `<span class="friend-location-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(countText)}</span>` : ''}`;
+      : `<span class="friend-state friend-location-permission ${permissionClass}">${escapeHtml(permissionLabel(permission))}</span>${region ? `<span class="friend-location-region">${escapeHtml(region)}</span>` : ''}${countText ? lt`<span class="friend-location-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(countText)}</span>` : ''}`;
+
+  const lastActivityText = !friendIsOnline(friend) ? formatActivityDateTime(friend.last_activity) : '';
+  const lastActivity = lastActivityText
+    ? `<time class="friend-location-last-activity" datetime="${escapeHtml(friend.last_activity)}" title="${escapeHtml(uiText('lastActivity'))}">${escapeHtml(lastActivityText)}</time>`
+    : '';
 
   const locationName = launchUrl
-    ? `<a class="friend-location-world-link" href="${escapeHtml(launchUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式Launchページを開く">${escapeHtml(locationTitle)}</a>`
+    ? lt`<a class="friend-location-world-link" href="${escapeHtml(launchUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式Launchページを開く">${escapeHtml(locationTitle)}</a>`
     : `<span class="friend-location-world-name" title="${escapeHtml(locationTitle)}">${escapeHtml(locationTitle)}</span>`;
 
   const locationData = entry?.location && !isPrivate ? ` data-location="${escapeHtml(entry.location)}"` : '';
-  const previewDisabledClass = isPrivate || isWebsite ? ' friend-location-no-preview' : '';
+  const previewDisabledClass = !friendIsOnline(friend) || isPrivate || isWebsite ? ' friend-location-no-preview' : '';
   return `
-    <article class="friend-location-item${entry && needsHydration(entry) ? ' friend-location-loading' : ''}${previewDisabledClass}" data-friend-id="${escapeHtml(friend.id)}"${locationData}>
+    <article class="friend-location-item${!friendIsOnline(friend) ? ' friend-offline' : ''}${entry && needsHydration(entry) ? ' friend-location-loading' : ''}${previewDisabledClass}" data-friend-id="${escapeHtml(friend.id)}"${locationData}>
       <div class="friend-location-avatar-wrap">
         ${avatarContent}
         <span class="online-dot ${status.className} friend-location-online-dot" title="${escapeHtml(status.label)}" aria-label="${escapeHtml(status.label)}">●</span>
@@ -967,11 +1155,30 @@ function renderFriendLocationItem(friend) {
         <div class="friend-location-name-line">
           ${profileUrl ? `<a class="friend-location-name" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}</a>` : `<span class="friend-location-name">${escapeHtml(name)}</span>`}
         </div>
-        <div class="friend-location-world-line">${locationName}</div>
+        <div class="friend-location-world-line">${locationName}${lastActivity}</div>
         <div class="friend-location-meta">${locationMeta}</div>
       </div>
       ${thumbWrapped}
     </article>`;
+}
+
+function renderFavoriteGroupEditor(group) {
+  const editor = state.favoriteGroupEditor;
+  if (editor?.groupName !== group.id) return '';
+  const disabled = editor.saving ? ' disabled' : '';
+  return lt`<form class="favorite-group-editor" data-group-editor="${escapeHtml(group.id)}">
+    <label class="favorite-group-editor-label">グループ名
+      <input class="favorite-group-name-input" name="displayName" type="text" autocomplete="off"
+        aria-label="Favoriteグループ名" maxlength="${CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH}" aria-describedby="favorite-group-name-help" value="${escapeHtml(editor.draft)}" required${disabled}>
+    </label>
+    <div class="favorite-group-editor-actions">
+      <span class="favorite-group-name-count">${editor.draft.length} / ${CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH}</span>
+      <button class="favorite-group-save" type="submit"${editor.saving || editor.outcomeUnknown ? ' disabled' : ''}>保存</button>
+      <button class="favorite-group-cancel" type="button" data-group-edit-cancel${disabled}>キャンセル</button>
+    </div>
+    <p class="favorite-group-editor-help" id="favorite-group-name-help">最大20文字。一部の絵文字は2文字分として数えます。</p>
+    <p class="favorite-group-editor-error" role="alert"${editor.error ? '' : ' hidden'}>${escapeHtml(editor.error || '')}</p>
+  </form>`;
 }
 
 function renderFriendLocationView() {
@@ -980,17 +1187,20 @@ function renderFriendLocationView() {
     const isFavoriteGroup = index < 3;
     const collapsed = state.collapsedFriendGroups.has(group.id);
     const icon = isFavoriteGroup ? '★' : '●';
+    const regularFriends = group.id === 'ungrouped' ? group.friends.filter(friendIsOnline) : group.friends;
+    const offlineFriends = group.id === 'ungrouped' ? group.friends.filter(friend => !friendIsOnline(friend)) : [];
     const rows = collapsed
       ? ''
-      : group.friends.length
-        ? group.friends.map(renderFriendLocationItem).join('')
-        : '<div class="friend-location-section-empty">オンラインのフレンドはいません</div>';
-    return `
+      : regularFriends.length
+        ? limitedMarkup(regularFriends, group.id, renderFriendLocationItem)
+        : group.id === 'ungrouped' && offlineFriends.length ? '' : t('<div class="friend-location-section-empty">該当するフレンドはいません</div>');
+    return lt`
       <section class="friend-location-section${collapsed ? ' is-collapsed' : ''}" data-favorite-group="${escapeHtml(group.id)}">
+        <div class="friend-location-section-heading">
         <button class="friend-location-section-header" type="button"
                 data-friend-group-toggle="${escapeHtml(group.id)}"
                 aria-expanded="${String(!collapsed)}"
-                title="${collapsed ? '展開' : '折り畳む'}">
+                title="${collapsed ? t('展開') : t('折り畳む')}">
           <span class="friend-location-section-title">
             <span class="friend-location-section-chevron" aria-hidden="true">${collapsed ? '▶' : '▼'}</span>
             <span class="friend-location-section-icon${isFavoriteGroup ? ' is-favorite' : ''}" aria-hidden="true">${icon}</span>
@@ -998,11 +1208,27 @@ function renderFriendLocationView() {
           </span>
           <span class="friend-location-section-count">${group.friends.length}人</span>
         </button>
-        ${collapsed ? '' : `<div class="friend-location-grid">${rows}</div>`}
+        ${isFavoriteGroup ? lt`<button class="favorite-group-edit-button" type="button" data-group-edit="${escapeHtml(group.id)}" aria-label="${escapeHtml(group.label)}の名前を編集" title="名前を編集"${state.favoriteGroupEditor?.saving ? ' disabled' : ''}>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1 12-12a2.8 2.8 0 0 0-4-4L4 15z"/></svg>
+        </button>` : ''}
+        </div>
+        ${renderFavoriteGroupEditor(group)}
+        ${collapsed ? '' : `${rows ? `<div class="friend-location-grid">${rows}</div>` : ''}${group.id === 'ungrouped' && elements.showOffline?.checked ? renderUngroupedOfflineSection(offlineFriends) : ''}`}
       </section>`;
   }).join('');
 
   return `<div class="friend-location-view">${sections}</div>`;
+}
+
+function renderUngroupedOfflineSection(friends) {
+  const collapsed = state.collapsedFriendGroups.has('ungrouped-offline');
+  return lt`<section class="friend-location-offline-section${collapsed ? ' is-collapsed' : ''}" data-offline-section>
+    <button class="friend-location-section-header" type="button" data-friend-group-toggle="ungrouped-offline" aria-expanded="${String(!collapsed)}" aria-controls="ungroupedOfflineFriends" title="${collapsed ? t('展開') : t('折り畳む')}">
+      <span class="friend-location-section-title"><span class="friend-location-section-chevron" aria-hidden="true">${collapsed ? '▶' : '▼'}</span><span class="friend-location-section-icon" aria-hidden="true">○</span>Offline</span>
+      <span class="friend-location-section-count">${friends.length}人</span>
+    </button>
+    ${collapsed ? '' : `<div id="ungroupedOfflineFriends" class="friend-location-grid">${friends.length ? limitedMarkup(friends, 'ungrouped-offline', renderFriendLocationItem) : t('<div class="friend-location-section-empty">Offlineのフレンドはいません</div>')}</div>`}
+  </section>`;
 }
 
 function buildInstanceLaunchUrl(entry) {
@@ -1050,8 +1276,8 @@ function renderParticipantList(entry, { showAll = false } = {}) {
   );
   if (!participants.length) {
     const empty = !showAll && state.tab === TABS.FAVORITE_ONLY
-      ? '表示対象のFavoriteフレンドはいません'
-      : '表示対象のユーザーはいません';
+      ? t('表示対象のFavoriteフレンドはいません')
+      : t('表示対象のユーザーはいません');
     return `<div class="participant-empty">${escapeHtml(empty)}</div>`;
   }
 
@@ -1071,7 +1297,7 @@ function renderParticipantList(entry, { showAll = false } = {}) {
       ? `<img class="participant-avatar" data-image-src="${escapeHtml(src)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
       : '<div class="participant-avatar participant-avatar-empty"></div>';
     const avatarLink = profileUrl
-      ? `<a class="participant-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${avatar}</a>`
+      ? lt`<a class="participant-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${avatar}</a>`
       : avatar;
     const isOwner = Boolean(ownerId && ownerId === user.id);
     const isFriend = friendMap().has(user.id);
@@ -1104,7 +1330,7 @@ function renderPrivateInstance(entry, { showAll = false } = {}) {
       : entry.friends;
 
   const collapsible = !showAll && state.viewMode !== VIEW_MODES.FRIENDS && state.tab === TABS.ALL;
-  const header = collapsible ? `<button type="button" class="friend-location-section-header" data-private-toggle="true" aria-expanded="${!state.privateCollapsed}" aria-controls="privateInstanceUsers"><span class="friend-location-section-chevron" aria-hidden="true">${state.privateCollapsed ? '▶' : '▼'}</span><span class="friend-location-section-title">Private</span><span class="friend-location-section-count">${visibleFriends.length}人</span></button>` : '';
+  const header = collapsible ? lt`<button type="button" class="friend-location-section-header" data-private-toggle="true" aria-expanded="${!state.privateCollapsed}" aria-controls="privateInstanceUsers"><span class="friend-location-section-chevron" aria-hidden="true">${state.privateCollapsed ? '▶' : '▼'}</span><span class="friend-location-section-title">Private</span><span class="friend-location-section-count">${visibleFriends.length}人</span></button>` : '';
   if (collapsible && state.privateCollapsed) return `<section class="friend-location-section private-instance-section is-collapsed" data-location="${escapeHtml(entry.location)}">${header}</section>`;
   const body = `
     <article class="private-card${instanceIsHighlighted(entry) ? ' instance-highlight' : ''}" data-location="${escapeHtml(entry.location)}" aria-label="Private">
@@ -1118,7 +1344,7 @@ function renderPrivateInstance(entry, { showAll = false } = {}) {
             ? `<img class="private-avatar" data-image-src="${escapeHtml(src)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
             : `<div class="private-avatar private-avatar-empty" aria-label="${escapeHtml(name)}"></div>`;
           const privateAvatarLink = profileUrl
-            ? `<a class="private-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${privateAvatar}</a>`
+            ? lt`<a class="private-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${privateAvatar}</a>`
             : privateAvatar;
           return `
             <div class="private-user" title="${escapeHtml(name)}">
@@ -1129,7 +1355,7 @@ function renderPrivateInstance(entry, { showAll = false } = {}) {
               <div class="private-user-name">${escapeHtml(name)}</div>
             </div>`;
         }).join('')}
-        ${visibleFriends.length === 0 ? `<div class="private-empty">${favoriteMode ? 'Favoriteフレンドはいません' : '表示対象のユーザーはいません'}</div>` : ''}
+        ${visibleFriends.length === 0 ? `<div class="private-empty">${favoriteMode ? t('Favoriteフレンドはいません') : t('表示対象のユーザーはいません')}</div>` : ''}
       </div>
     </article>`;
   return collapsible ? `<section class="friend-location-section private-instance-section" data-location="${escapeHtml(entry.location)}">${header}<div id="privateInstanceUsers">${body}</div></section>` : body;
@@ -1153,7 +1379,7 @@ function renderInstanceCard(entry, { preview = false } = {}) {
   const groupName = entry.groupName
     || entry.instanceData?.group?.name
     || entry.instanceData?.groupName
-    || (entry.groupId ? 'グループ名取得中…' : '');
+    || (entry.groupId ? t('グループ名取得中…') : '');
   const userCount = effectiveInstanceUserCount(entry, friendMap());
   const capacity = entry.world?.capacity ?? entry.capacity ?? entry.world?.hardCapacity;
   const allFriends = uniqueUsers(entry.friends);
@@ -1170,9 +1396,9 @@ function renderInstanceCard(entry, { preview = false } = {}) {
   const regionBadge = ''; 
   const hydrated = Boolean(entry.instanceData || entry.world);
 
-  return `
+  return lt`
     <article class="card${hydrated ? '' : ' card-loading'}${instanceIsHighlighted(entry) ? ' instance-highlight' : ''}" data-location="${escapeHtml(entry.location)}">
-      ${worldUrl ? `<a class="thumb-wrap thumb-clickable" href="${escapeHtml(worldUrl)}" target="_blank" rel="noopener noreferrer" title="ワールドページを開く">` : '<div class="thumb-wrap">'}
+      ${worldUrl ? lt`<a class="thumb-wrap thumb-clickable" href="${escapeHtml(worldUrl)}" target="_blank" rel="noopener noreferrer" title="ワールドページを開く">` : '<div class="thumb-wrap">'}
         ${thumb
           ? `<img class="thumb" data-image-src="${escapeHtml(thumb)}" loading="eager" decoding="async" alt="">`
           : '<div class="thumb thumb-placeholder"></div>'}
@@ -1191,7 +1417,7 @@ function renderInstanceCard(entry, { preview = false } = {}) {
       <div class="info-panel">
         <div class="instance-title-line">
           ${launchUrl
-            ? `<a class="instance-title-name instance-title-name-link" href="${escapeHtml(launchUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式Launchページを開く">${escapeHtml(worldName)}</a>`
+            ? lt`<a class="instance-title-name instance-title-name-link" href="${escapeHtml(launchUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式Launchページを開く">${escapeHtml(worldName)}</a>`
             : `<span class="instance-title-name" title="${escapeHtml(worldName)}">${escapeHtml(worldName)}</span>`}
           ${entry.groupId ? `<span class="instance-title-separator">/</span><span class="instance-title-group" title="${escapeHtml(groupName)}">${escapeHtml(groupName)}</span>` : ''}
         </div>
@@ -1222,7 +1448,7 @@ async function onInviteMeClick(event) {
   const entry = getCurrentInstanceEntry(location);
   if (!entry || !entry.worldId || !entry.instanceId) return;
   if (CONFIG.DEBUG_MODE || entry.debug) {
-    showActionToast('DEBUG MODE: ダミーインスタンスにはInvite Meを送信しません。', { delay: 2600 });
+    showActionToast(t('DEBUG MODE: ダミーインスタンスにはInvite Meを送信しません。'), { delay: 2600 });
     return;
   }
   if (button.disabled || state.loading || state.pendingInvites.has(location)) return;
@@ -1231,13 +1457,13 @@ async function onInviteMeClick(event) {
   state.pendingInvites.add(location);
   button.disabled = true;
   button.classList.add('is-loading');
-  button.textContent = '送信中…';
+  button.textContent = t('送信中…');
   try {
     await repository.inviteMyselfTo(location);
     if (generation !== state.loadGeneration) return;
     button.textContent = 'Invited';
     button.classList.add('is-success');
-    showActionToast('Invite Meを送信しました', { delay: 2200 });
+    showActionToast(t('Invite Meを送信しました'), { delay: 2200 });
     window.setTimeout(() => {
       if (!button.isConnected) return;
       button.textContent = 'Invite Me';
@@ -1252,11 +1478,11 @@ async function onInviteMeClick(event) {
     button.classList.remove('is-loading');
     button.disabled = false;
     const message = error?.status === 401
-      ? 'VRChatのログインセッションが無効です。'
+      ? t('VRChatのログインセッションが無効です。')
       : error?.status === 404
-        ? 'このインスタンスは存在しないか、Invite Meを送信できません。'
-        : error?.outcomeUnknown ? '送信結果を確認できませんでした。VRChat側の通知を確認してください。'
-      : `Invite Meの送信に失敗しました${error?.status ? ` (${error.status})` : ''}`;
+        ? t('このインスタンスは存在しないか、Invite Meを送信できません。')
+        : error?.outcomeUnknown ? t('送信結果を確認できませんでした。VRChat側の通知を確認してください。')
+      : lt`Invite Meの送信に失敗しました${error?.status ? ` (${error.status})` : ''}`;
     showActionToast(message, { error: true, delay: 5600 });
   } finally {
     state.pendingInvites.delete(location);
@@ -1660,16 +1886,37 @@ function onFriendSidebarMouseLeave() {
 
 function toggleFriendLocationGroup(groupId) {
   if (!groupId) return;
-  if (state.collapsedFriendGroups.has(groupId)) {
-    state.collapsedFriendGroups.delete(groupId);
-  } else {
-    state.collapsedFriendGroups.add(groupId);
-  }
+  if (state.collapsedFriendGroups.has(groupId)) state.collapsedFriendGroups.delete(groupId);
+  else state.collapsedFriendGroups.add(groupId);
   hideFriendInstancePreview({ immediate: true });
   render({ resetScroll: false });
 }
 
 function onFriendViewControlClick(event) {
+  const editButton = event.target.closest('[data-group-edit]');
+  if (editButton && elements.list?.contains(editButton)) {
+    event.preventDefault();
+    if (state.loading || state.favoriteMutationPending || state.pendingInvites.size) return;
+    const groupName = editButton.dataset.groupEdit;
+    const group = state.favoriteGroups.find(group => group.name === groupName);
+    if (!FAVORITE_GROUP_NAMES.includes(groupName)) return;
+    if (state.favoriteGroupEditor?.groupName === groupName) {
+      closeFavoriteGroupEditor(); return;
+    }
+    if (state.favoriteGroupEditor?.groupName !== groupName) {
+      state.favoriteGroupEditor = { groupName, draft: group?.displayName || `Favorite List ${FAVORITE_GROUP_NAMES.indexOf(groupName) + 1}`, saving: false, error: '', outcomeUnknown: false };
+    }
+    render({ resetScroll: false });
+    const input = elements.list.querySelector('.favorite-group-name-input');
+    input?.focus(); input?.select();
+    return;
+  }
+  if (event.target.closest('[data-group-edit-cancel]')) {
+    event.preventDefault();
+    if (state.favoriteGroupEditor?.saving) return;
+    closeFavoriteGroupEditor(); return;
+  }
+  if (event.target.closest('[data-group-editor]')) return;
   const privateToggle = event.target.closest('[data-private-toggle]');
   if (privateToggle && elements.list?.contains(privateToggle)) {
     event.preventDefault(); state.privateCollapsed = !state.privateCollapsed;
@@ -1679,6 +1926,61 @@ function onFriendViewControlClick(event) {
   if (!toggle || !elements.list?.contains(toggle)) return;
   event.preventDefault();
   toggleFriendLocationGroup(toggle.dataset.friendGroupToggle || '');
+}
+
+function closeFavoriteGroupEditor({ restoreFocus = true } = {}) {
+  const groupName = state.favoriteGroupEditor?.groupName;
+  state.favoriteGroupEditor = null;
+  render({ resetScroll: false });
+  if (restoreFocus) elements.list.querySelector(`[data-group-edit="${groupName}"]`)?.focus();
+}
+
+async function saveFavoriteGroupName(event) {
+  if (!event.target.matches('[data-group-editor]')) return;
+  event.preventDefault();
+  const editor = state.favoriteGroupEditor;
+  if (!editor || editor.saving || editor.outcomeUnknown || state.loading || state.favoriteMutationPending || state.pendingInvites.size) return;
+  const name = editor.draft.trim();
+  if (!name || name.length > CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH || /[\r\n\u0000]/.test(name)) {
+    editor.error = name.length > CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH ? t('グループ名は20文字以内で入力してください。') : t('グループ名を入力してください。'); render({ resetScroll: false });
+    elements.list.querySelector('.favorite-group-name-input')?.focus(); return;
+  }
+  const group = state.favoriteGroups.find(group => group.name === editor.groupName);
+  if (name === group?.displayName) { closeFavoriteGroupEditor(); return; }
+  if (CONFIG.DEBUG_MODE) { showActionToast(t('DEBUG MODE: グループ名は変更しません。')); return; }
+  const generation = state.loadGeneration;
+  const dataRepository = repository;
+  editor.saving = true; editor.error = '';
+  state.favoriteMutationPending = true;
+  actionToast.setUndoBusy(true);
+  render({ resetScroll: false });
+  showActionToast(t('グループ名を保存しています…'), { delay: 0 });
+  try {
+    const result = await dataRepository.renameFriendFavoriteGroup(editor.groupName, name);
+    if (generation !== state.loadGeneration || dataRepository.disposed) return;
+    if (result.syncError?.status === 401) { handleSessionExpired(); return; }
+    applyFavoriteState(result.favoriteState);
+    state.favoriteGroupEditor = null;
+    render({ resetScroll: false });
+    elements.list.querySelector(`[data-group-edit="${editor.groupName}"]`)?.focus();
+    showActionToast(result.syncFailed ? t('グループ名を保存しました（再確認に失敗しました。次回更新時に確認します）。') : t('グループ名を変更しました。'), { delay: 4000 });
+  } catch (error) {
+    if (generation !== state.loadGeneration || error?.name === 'AbortError') return;
+    if (error?.status === 401) { handleSessionExpired(); return; }
+    editor.saving = false;
+    editor.outcomeUnknown = Boolean(error?.outcomeUnknown);
+    editor.error = editor.outcomeUnknown
+      ? t('変更結果を確認できませんでした。「更新」で名前を確認してください。')
+      : error?.status === 400
+        ? t('名前が受け付けられませんでした。文字数や内容を変更して再試行してください。')
+        : lt`グループ名の保存に失敗しました${error?.status ? ` (${error.status})` : ''}。再試行できます。`;
+    render({ resetScroll: false });
+    elements.list.querySelector('.favorite-group-name-input')?.focus();
+    showActionToast(editor.error, { error: true, delay: 5600 });
+  } finally {
+    if (state.favoriteGroupEditor === editor) editor.saving = false;
+    if (generation === state.loadGeneration) { state.favoriteMutationPending = false; actionToast.setUndoBusy(false); }
+  }
 }
 
 const FAVORITE_GROUP_NAMES = Object.freeze(['group_0', 'group_1', 'group_2']);
@@ -1726,7 +2028,7 @@ function renderFavoriteMenu(userId, anchor) {
     return `<button class="favorite-menu-item${active ? ' is-current' : ''}" type="button" role="menuitemradio" aria-checked="${String(active)}" data-favorite-group="${name}" data-favorite-user-id="${escapeHtml(userId)}"><span class="favorite-menu-check" aria-hidden="true">${active ? '✓' : ''}</span><span class="favorite-menu-label">${escapeHtml(label)}</span></button>`;
   }).join('');
   const removeRow = isFavorite
-    ? `<div class="favorite-menu-separator" role="separator"></div><button class="favorite-menu-item favorite-menu-remove" type="button" role="menuitem" data-favorite-remove="true" data-favorite-user-id="${escapeHtml(userId)}"><span class="favorite-menu-check" aria-hidden="true"></span><span class="favorite-menu-label">Favoriteを外す</span></button>`
+    ? lt`<div class="favorite-menu-separator" role="separator"></div><button class="favorite-menu-item favorite-menu-remove" type="button" role="menuitem" data-favorite-remove="true" data-favorite-user-id="${escapeHtml(userId)}"><span class="favorite-menu-check" aria-hidden="true"></span><span class="favorite-menu-label">Favoriteを外す</span></button>`
     : '';
   menu.innerHTML = `${groupRows}${removeRow}`;
   menu.classList.remove('hidden');
@@ -1750,23 +2052,25 @@ function onFavoriteMenuMouseLeave() {
 async function applyFavoriteMutation({ userId, groupName = '', remove = false } = {}) {
   if (!userId || state.favoriteMutationPending || state.loading) return;
   if (CONFIG.DEBUG_MODE) {
-    showActionToast('DEBUG MODE: Favorite情報はVRChatへ変更しません。', { delay: 2600 });
+    showActionToast(t('DEBUG MODE: Favorite情報はVRChatへ変更しません。'), { delay: 2600 });
     closeFavoriteMenu();
     return;
   }
   const currentRecord = state.favoriteRecords.get(userId) || null;
+  const previousTags = [...(currentRecord?.tags || [])];
   const currentGroup = favoriteGroupForUser(userId);
   if (!remove && currentGroup === groupName && state.favorites.has(userId)) {
     closeFavoriteMenu();
     return;
   }
 
+  actionToast.clearUndo(); state.favoriteUndo = null;
   state.favoriteMutationPending = true;
   state.favoriteMenu.busy = true;
   const generation = state.loadGeneration;
   const dataRepository = repository;
   elements.favoriteMenu?.querySelectorAll('button').forEach((button) => { button.disabled = true; });
-  showActionToast(remove ? 'Favoriteを外しています…' : 'Favoriteを更新中…', { delay: 0 });
+  showActionToast(remove ? t('Favoriteを外しています…') : t('Favoriteを更新中…'), { delay: 0 });
   try {
     const result = remove
       ? await dataRepository.removeFriendFavorite(currentRecord)
@@ -1775,12 +2079,14 @@ async function applyFavoriteMutation({ userId, groupName = '', remove = false } 
     applyFavoriteState(result.favoriteState);
     closeFavoriteMenu();
     render({ resetScroll: false });
+    void loadOfflineFriendProfiles();
     if (result.syncFailed) {
-      if (result.syncError?.status === 401) handleSessionExpired();
-      const action = remove ? 'Favoriteを外しました' : 'Favoriteを更新しました';
-      showActionToast(`${action}（再同期に失敗しました。次回更新時に再確認します）`, { delay: 5200 });
+      if (result.syncError?.status === 401) { handleSessionExpired(); return; }
+      offerFavoriteUndo(userId, previousTags, remove ? [] : [groupName], generation);
+      const action = remove ? t('Favoriteを外しました') : t('Favoriteを更新しました');
+      showActionToast(lt`${action}（再同期に失敗しました。次回更新時に再確認します）`, { delay: 5200 });
     } else {
-      showActionToast(remove ? 'Favoriteを外しました' : 'Favoriteを更新しました', { delay: 2200 });
+      offerFavoriteUndo(userId, previousTags, [...(state.favoriteRecords.get(userId)?.tags || [])], generation);
     }
   } catch (error) {
     if (generation !== state.loadGeneration || error?.name === 'AbortError') return;
@@ -1788,17 +2094,67 @@ async function applyFavoriteMutation({ userId, groupName = '', remove = false } 
     console.warn('Could not update Favorite:', userId, error);
     state.favoriteMenu.busy = false;
     elements.favoriteMenu?.querySelectorAll('button').forEach((button) => { button.disabled = false; });
-    const rollback = error?.favoriteRollbackFailed ? '（元のFavorite Listへの復元にも失敗しました）' : '';
+    const rollback = error?.favoriteRollbackFailed ? t('（元のFavorite Listへの復元にも失敗しました）') : '';
     const message = error?.status === 401
-      ? 'VRChatのログインセッションが無効です。'
+      ? t('VRChatのログインセッションが無効です。')
       : error?.status === 403
-        ? 'このフレンドのFavoriteを変更できません。'
+        ? t('このフレンドのFavoriteを変更できません。')
         : error?.favoriteOutcomeUnknown || error?.outcomeUnknown
-        ? '変更結果を確認できませんでした。更新してFavoriteの状態を確認してください。'
-      : `Favoriteの更新に失敗しました${error?.status ? ` (${error.status})` : ''}${rollback}`;
+        ? t('変更結果を確認できませんでした。更新してFavoriteの状態を確認してください。')
+      : lt`Favoriteの更新に失敗しました${error?.status ? ` (${error.status})` : ''}${rollback}`;
     showActionToast(message, { error: true, delay: 5600 });
   } finally {
-    state.favoriteMutationPending = false;
+    if (generation === state.loadGeneration) state.favoriteMutationPending = false;
+  }
+}
+
+function offerFavoriteUndo(userId, previousTags, expectedTags, generation) {
+  const ticket = { userId, previousTags, expectedTags, generation, account: state.user?.id };
+  state.favoriteUndo = ticket;
+  actionToast.setUndo(t('Favoriteを更新しました。'), () => void undoFavorite(ticket), () => {
+    if (state.favoriteUndo === ticket) state.favoriteUndo = null;
+  });
+}
+
+async function undoFavorite(ticket) {
+  if (state.favoriteUndo !== ticket || state.favoriteMutationPending || state.loading) return;
+  if (ticket.account !== state.user?.id) {
+    actionToast.clearUndo(); state.favoriteUndo = null; return;
+  }
+  const dataRepository = repository;
+  const generation = state.loadGeneration;
+  state.favoriteMutationPending = true;
+  actionToast.setUndoBusy(true);
+  closeFavoriteMenu();
+  try {
+    const result = await dataRepository.restoreFriendFavorite(ticket.userId, ticket.previousTags, ticket.expectedTags);
+    if (generation !== state.loadGeneration) return;
+    if (result.syncError?.status === 401) { handleSessionExpired(); return; }
+    applyFavoriteState(result.favoriteState);
+    render({ resetScroll: false });
+    showActionToast(result.syncFailed
+      ? t('Favoriteを元に戻しました。（再同期に失敗しました。更新で再確認してください）')
+      : t('Favoriteを元に戻しました。'), { delay: result.syncFailed ? 5200 : 2800 });
+  } catch (error) {
+    if (generation !== state.loadGeneration || error?.name === 'AbortError') return;
+    if (error?.status === 401) { handleSessionExpired(); return; }
+    // Reconcile once after a failed write; never blindly retry an uncertain one.
+    let live = error.favoriteState;
+    if (!live) {
+      try { live = await dataRepository.fetchFavoritesStrict(); }
+      catch (syncError) { if (syncError?.status === 401) { handleSessionExpired(); return; } }
+    }
+    if (generation !== state.loadGeneration) return;
+    if (live) { applyFavoriteState(live); render({ resetScroll: false }); }
+    showActionToast(error.favoriteConflict
+      ? t('Favoriteが別の画面で変更されたため、戻せませんでした。')
+      : t('Favoriteを元に戻せませんでした。') + (live ? t('現在の登録状態を表示しています。') : t('更新して登録状態を確認してください。')), { error: true, delay: 6500 });
+  } finally {
+    if (generation === state.loadGeneration) {
+      state.favoriteMutationPending = false;
+      state.favoriteUndo = null;
+      actionToast.clearUndo();
+    }
   }
 }
 
@@ -1862,14 +2218,14 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   renderFriendSidebar();
 
   const manifest = globalThis.chrome?.runtime?.getManifest?.();
-  const appVersion = manifest?.version_name || manifest?.version || '1.5.4.5';
+  const appVersion = manifest?.version_name || manifest?.version || '1.5.4.22';
   const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
   if (state.viewMode === VIEW_MODES.FRIENDS) {
     patchMarkup(elements.list, `${renderFriendLocationView()}${credit}`);
   } else {
     const data = getVisibleInstances();
     if (!data.length) {
-      patchMarkup(elements.list, `<div class="empty">表示できるインスタンスはありません。</div>${credit}`);
+      patchMarkup(elements.list, lt`<div class="empty">表示できるインスタンスはありません。</div>${credit}`);
     } else {
       patchMarkup(elements.list, `${data.map(renderInstanceCard).join('')}${credit}`);
     }
@@ -1902,8 +2258,8 @@ function focusFriendInstance(friend) {
     render({ resetScroll: false });
     showActionToast(
       targetTab === TABS.FAVORITE_PLUS
-        ? 'このフレンドのインスタンスはFavorite+には表示されません'
-        : 'このフレンドのインスタンスは「すべて」には表示されません',
+        ? t('このフレンドのインスタンスはFavorite+には表示されません')
+        : t('このフレンドのインスタンスは「すべて」には表示されません'),
       { delay: 3200 },
     );
     return;
@@ -1944,8 +2300,8 @@ function focusFriendInstance(friend) {
 function updateLoadedAtLabel() {
   if (!elements.updatedAt) return;
   if (!state.lastLoadedAt) {
-    elements.updatedAt.textContent = '更新: --:--:--';
-    elements.updatedAt.title = '最終更新';
+    elements.updatedAt.textContent = t('更新: --:--:--');
+    elements.updatedAt.title = t('最終更新');
     return;
   }
 
@@ -1953,9 +2309,9 @@ function updateLoadedAtLabel() {
   const time = [date.getHours(), date.getMinutes(), date.getSeconds()]
     .map((value) => String(value).padStart(2, '0'))
     .join(':');
-  const label = `更新: ${time}`;
+  const label = lt`更新: ${time}`;
   elements.updatedAt.textContent = label;
-  elements.updatedAt.title = state.dataFromCache ? `${label}（一部キャッシュ）` : label;
+  elements.updatedAt.title = state.dataFromCache ? lt`${label}（一部キャッシュ）` : label;
 }
 
 async function refreshGroupDataInBackground(userId, dataRepository, generation) {
@@ -2129,6 +2485,7 @@ function loadDebugData() {
     displayName: 'Debug Mode',
     username: 'debug_mode',
   };
+  state.onlineFriends = debug.friends;
   setFriendState(debug.friends);
   state.favorites = debug.favorites;
   state.favoriteRecords = new Map();
@@ -2139,10 +2496,19 @@ function loadDebugData() {
   elements.login?.classList.add('hidden');
   render();
   updateLoadedAtLabel();
-  setStatus(`DEBUG MODE: 各${Math.max(1, Math.floor(Number(CONFIG.DEBUG_FRIEND_COUNT) || 20))}人・Favorite ${CONFIG.DEBUG_FAVORITE_COUNT}人 / 3インスタンス（Public・Group・Private）`);
+  setStatus(lt`DEBUG MODE: 各${Math.max(1, Math.floor(Number(CONFIG.DEBUG_FRIEND_COUNT) || 20))}人・Favorite ${CONFIG.DEBUG_FAVORITE_COUNT}人 / 3インスタンス（Public・Group・Private）`);
 }
 
 function clearDisplayedData() {
+  state.favoriteGroupEditor = null;
+  state.favoriteMutationPending = false;
+  actionToast.clearUndo(); state.favoriteUndo = null;
+  state.offlineLoadToken += 1;
+  state.offlineProfiles.clear();
+  state.offlineNameLoad = { loading: false, failed: false, loaded: 0, total: 0 };
+  state.collapsedFriendGroups.add('ungrouped-offline');
+  renderOfflineSearchStatus();
+  state.onlineFriends = [];
   state.privateCollapsed = true;
   hideFriendInstancePreview({ immediate: true });
   closeFavoriteMenu();
@@ -2160,6 +2526,8 @@ function clearDisplayedData() {
   elements.friendList.replaceChildren();
   imageController.reset(); imageFallbacks.clear();
   elements.friendCount.textContent = '0 / 0';
+  elements.friendCount.title = t('表示中 / 表示対象総数');
+  elements.friendCount.setAttribute('aria-label', t('表示中 0人 / 表示対象総数 0人'));
   updateLoadedAtLabel();
 }
 
@@ -2171,7 +2539,7 @@ function handleSessionExpired() {
   if (elements.reloadButton) elements.reloadButton.disabled = false;
   clearDisplayedData();
   elements.login?.classList.remove('hidden');
-  setStatus('VRChatのログインセッションが無効です。VRChat公式サイトで再ログインしてください。', true);
+  setStatus(t('VRChatのログインセッションが無効です。VRChat公式サイトで再ログインしてください。'), true);
 }
 
 async function load({ reason = 'initial', preserveToast = false } = {}) {
@@ -2181,6 +2549,9 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     return;
   }
   if (state.loading || state.favoriteMutationPending || state.pendingInvites.size) return;
+  state.favoriteGroupEditor = null;
+  actionToast.setUndoBusy(true);
+  state.offlineLoadToken += 1;
   repository.dispose();
   repository = new DataRepository(new VrchatApiClient(), uiStorage);
   const dataRepository = repository;
@@ -2197,9 +2568,9 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
   if (notify) {
     setStatus('');
     if (!preserveToast) showActionToast(reason === 'automatic'
-      ? '自動更新しています…' : '情報を更新しています…', { delay: 0 });
+      ? t('自動更新しています…') : t('情報を更新しています…'), { delay: 0 });
   } else {
-    setStatus('VRChatログインセッションを確認中…');
+    setStatus(t('VRChatログインセッションを確認中…'));
   }
 
   try {
@@ -2212,14 +2583,15 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     // Do not paint stale cached lists first. Fetch the time-sensitive primary
     // datasets first so the first interactive render reflects current data (or
     // a same-account fallback only when the live request fails).
-    if (!notify) setStatus('フレンド情報を更新中…');
+    if (!notify) setStatus(t('フレンド情報を更新中…'));
     const [friends, favoriteState] = await Promise.all([
       dataRepository.fetchFriends(),
       dataRepository.fetchFavorites(),
     ]);
 
     if (!current()) return;
-    setFriendState(normalizeFriends(friends));
+    state.onlineFriends = normalizeFriends(friends);
+    state.offlineProfiles.clear();
     applyFavoriteState(favoriteState);
     state.instances = buildLocations(
       createFriendLocationMap(state.friends),
@@ -2236,9 +2608,11 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     updateLoadedAtLabel();
     setStatus('');
     if (notify) {
-      const message = reason === 'automatic' ? 'フレンド情報を自動更新しました' : 'フレンド情報を更新しました';
-      showActionToast(message + (state.dataFromCache ? '（一部キャッシュ）。' : '。'), { delay: 2800 });
+      const message = reason === 'automatic' ? t('フレンド情報を自動更新しました') : t('フレンド情報を更新しました');
+      showActionToast(message + (state.dataFromCache ? t('（一部キャッシュ）。') : '。'), { delay: 2800 });
     }
+
+    void loadOfflineFriendProfiles();
 
     // Group Instances are secondary data for this screen. Load them after the
     // first interactive paint so tab switching and friend clicks remain
@@ -2249,10 +2623,10 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
   } catch (error) {
     if (!current() || error?.name === 'AbortError') return;
     if (error?.status === 401) handleSessionExpired();
-    else if (notify) showActionToast(`${reason === 'automatic' ? '自動更新' : '更新'}に失敗しました: ${error?.message || error}`, { error: true, delay: 5000 });
-    else setStatus(`取得に失敗しました: ${error?.message || error}`, true);
+    else if (notify) showActionToast(lt`${reason === 'automatic' ? t('自動更新') : t('更新')}に失敗しました: ${error?.message || error}`, { error: true, delay: 5000 });
+    else setStatus(lt`取得に失敗しました: ${error?.message || error}`, true);
   } finally {
-    if (generation === state.loadGeneration) state.loading = false;
+    if (generation === state.loadGeneration) { state.loading = false; actionToast.setUndoBusy(false); }
     if (elements.reloadButton) elements.reloadButton.disabled = state.loading;
   }
 }
@@ -2360,7 +2734,7 @@ elements.friendSort?.addEventListener('change', () => {
 
 elements.autoRefresh?.addEventListener('change', () => {
   const minutes = Number(elements.autoRefresh.value);
-  state.autoRefreshMinutes = [10, 30].includes(minutes) ? minutes : 0;
+  state.autoRefreshMinutes = [5, 10, 30].includes(minutes) ? minutes : 0;
   persistUiPreferences();
   scheduleAutoRefresh();
 });
@@ -2375,9 +2749,21 @@ elements.sidebarToggle?.addEventListener('click', () => {
 
 document.addEventListener('click', onFavoriteUiClick, true);
 
+// Let the original click finish before rendering removes the editor's DOM.
+// This preserves the clicked control's action and focus.
+document.addEventListener('click', (event) => {
+  const editor = state.favoriteGroupEditor;
+  if (!editor || editor.saving || event.target.closest('[data-group-editor], [data-group-edit]')) return;
+  queueMicrotask(() => {
+    if (state.favoriteGroupEditor === editor && !editor.saving) {
+      closeFavoriteGroupEditor({ restoreFocus: false });
+    }
+  });
+}, true);
+
 document.addEventListener('click', (event) => {
   if (elements.settingsPanel?.classList.contains('hidden')) return;
-  if (event.target.closest('.toolbar-options')) return;
+  if (event.target.closest('.toolbar-options') || elements.settingsPanel.contains(event.target)) return;
   setSettingsPanelOpen(false);
 });
 
@@ -2392,8 +2778,34 @@ document.addEventListener('keydown', (event) => {
   elements.settingsButton?.focus();
 });
 
-elements.friendSearch?.addEventListener('input', () => renderFriendSidebar());
+function bindSearch(input, callback) {
+  let composing = false;
+  input?.addEventListener('compositionstart', () => { composing = true; });
+  input?.addEventListener('compositionend', () => { composing = false; resetDisplayLimits(); callback(); });
+  input?.addEventListener('input', event => { if (!composing && !event.isComposing) { resetDisplayLimits(); callback(); } });
+}
+bindSearch(elements.friendSearch, renderFriendSidebar);
+elements.offlineSort?.addEventListener('change', () => {
+  state.offlineSort = elements.offlineSort.value;
+  resetDisplayLimits(); persistUiPreferences(); render();
+});
+for (const root of [elements.friendList, elements.list]) {
+  root?.addEventListener('click', event => {
+    const button = event.target.closest('[data-load-more]');
+    if (!button) return;
+    const key = button.dataset.loadMore;
+    const previous = state.displayLimits.get(key) || CONFIG.DISPLAY_BATCH_SIZE;
+    state.displayLimits.set(key, previous + CONFIG.DISPLAY_BATCH_SIZE);
+    if (key === 'sidebar') renderFriendSidebar(); else render();
+    // Keep keyboard navigation at the beginning of the newly revealed batch.
+    const items = key === 'sidebar' ? root.querySelectorAll('.friend-item')
+      : (root.querySelector(key === 'ungrouped-offline' ? '[data-offline-section]' : `[data-favorite-group="${key}"]`)?.querySelectorAll('.friend-location-item') || []);
+    const focusTarget = items[previous]?.matches('.friend-item') ? items[previous] : items[previous]?.querySelector('a, button');
+    focusTarget?.focus({ preventScroll: true });
+  });
+}
 elements.friendFilter?.addEventListener('change', () => {
+  resetDisplayLimits();
   state.requestedFriendFilter = elements.friendFilter.value || 'favorite';
   persistUiPreferences();
   renderFriendSidebar();
@@ -2403,8 +2815,19 @@ elements.showOnWebsite?.addEventListener('change', () => {
   renderFriendSidebar();
   if (state.viewMode === VIEW_MODES.FRIENDS) render({ resetScroll: false });
 });
+elements.showOffline?.addEventListener('change', () => {
+  state.offlineLoadToken += 1;
+  state.offlineNameLoad.loading = false;
+  if (elements.showOffline.checked) state.collapsedFriendGroups.add('ungrouped-offline');
+  persistUiPreferences();
+  rebuildDisplayedFriends();
+  hideFriendInstancePreview({ immediate: true });
+  render({ resetScroll: false });
+  void loadOfflineFriendProfiles();
+});
 elements.clearFriendSearch?.addEventListener('click', () => {
   if (!elements.friendSearch) return;
+  resetDisplayLimits();
   elements.friendSearch.value = '';
   elements.friendSearch.focus();
   renderFriendSidebar();
@@ -2416,6 +2839,23 @@ elements.friendList?.addEventListener('mouseout', onFriendSidebarMouseOut);
 elements.friendList?.addEventListener('mouseleave', onFriendSidebarMouseLeave);
 elements.friendList?.addEventListener('scroll', () => hideFriendInstancePreview({ immediate: true }), { passive: true });
 elements.list?.addEventListener('click', onFriendViewControlClick);
+elements.list?.addEventListener('submit', event => { void saveFavoriteGroupName(event); });
+elements.list?.addEventListener('input', event => {
+  if (!event.target.matches('.favorite-group-name-input') || !state.favoriteGroupEditor || state.favoriteGroupEditor.saving) return;
+  state.favoriteGroupEditor.draft = event.target.value;
+  const form = event.target.closest('[data-group-editor]');
+  form.querySelector('.favorite-group-name-count').textContent = `${event.target.value.length} / ${CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH}`;
+  if (!state.favoriteGroupEditor.outcomeUnknown) {
+    state.favoriteGroupEditor.error = ''; form.querySelector('.favorite-group-editor-error').hidden = true;
+  }
+});
+elements.list?.addEventListener('keydown', event => {
+  if (!event.target.closest('[data-group-editor]')) return;
+  if (event.key === 'Escape' && !event.isComposing && !state.favoriteGroupEditor?.saving) {
+    event.preventDefault(); event.stopPropagation(); closeFavoriteGroupEditor();
+  }
+  if (event.key === 'Enter' && event.isComposing) event.preventDefault();
+});
 elements.list?.addEventListener('click', onInviteMeClick);
 elements.list?.addEventListener('mouseover', onFriendLocationMouseOver);
 elements.list?.addEventListener('mousemove', onFriendLocationMouseMove, { passive: true });
@@ -2438,14 +2878,14 @@ elements.loginButton?.addEventListener('click', () => {
 elements.reloadButton?.addEventListener('click', async () => {
   if (state.loading) return;
   if (state.favoriteMutationPending || state.pendingInvites.size) {
-    showActionToast('操作の完了後に更新してください。');
+    showActionToast(t('操作の完了後に更新してください。'));
     return;
   }
   await load({ reason: 'manual' });
 });
 elements.clearCacheButton?.addEventListener('click', async () => {
   if (state.favoriteMutationPending || state.pendingInvites.size) {
-    showActionToast('操作の完了後にキャッシュを削除してください。');
+    showActionToast(t('操作の完了後にキャッシュを削除してください。'));
     return;
   }
   state.loadGeneration += 1;
@@ -2457,7 +2897,7 @@ elements.clearCacheButton?.addEventListener('click', async () => {
   // Notify other open Viewer tabs before rebuilding this tab's caches.
   uiStorage.set('vrc_viewer_cache_clear_event', { at: Date.now(), nonce: Math.random() });
   setSettingsPanelOpen(false);
-  showActionToast(cleared ? 'キャッシュを削除しました。最新情報を取得します。' : '一部のキャッシュを削除できませんでした。', { error: !cleared });
+  showActionToast(cleared ? t('キャッシュを削除しました。最新情報を取得します。') : t('一部のキャッシュを削除できませんでした。'), { error: !cleared });
   await load({ reason: 'cache', preserveToast: true });
 });
 window.addEventListener('storage', event => {
@@ -2471,13 +2911,16 @@ window.addEventListener('storage', event => {
   clearDisplayedData();
   if (elements.reloadButton) elements.reloadButton.disabled = false;
   setStatus('');
-  showActionToast('別の画面でキャッシュが削除されました。「更新」で最新情報を取得してください。', { delay: 8000 });
+  showActionToast(t('別の画面でキャッシュが削除されました。「更新」で最新情報を取得してください。'), { delay: 8000 });
 });
 window.addEventListener('pagehide', () => { uiStorage.flush(); repository.dispose(); imagePool.clear(); });
 window.addEventListener('pageshow', event => { if (event.persisted) { imageController.reset(); void load({ reason: 'restore' }); } });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     clearAutoRefreshTimer();
+    state.offlineLoadToken += 1;
+    state.offlineNameLoad.loading = false;
+    renderOfflineSearchStatus();
     uiStorage.flush();
     hydrationController.pause();
     disconnectSidebarHydrationObserver();
@@ -2487,11 +2930,32 @@ document.addEventListener('visibilitychange', () => {
     if (!state.loading && !repository.disposed) {
       hydrationController.sync();
       syncSidebarHydration();
+      void loadOfflineFriendProfiles();
     }
   }
 });
 
+// Keep the fixed settings dialog outside backdrop-filter containing blocks.
+document.body.append(elements.settingsPanel);
+captureStaticLabels();
+document.getElementById('language').addEventListener('change', event => {
+  setLocale(event.target.value);
+  persistUiPreferences();
+  applyMainSortOptions();
+  applySidebarMode();
+  renderOfflineSearchStatus();
+  updateLoadedAtLabel();
+  renderFriendFilterOptions();
+  if (state.favoriteGroupEditor?.error) state.favoriteGroupEditor.error = relocalize(state.favoriteGroupEditor.error);
+  setStatus(relocalize(elements.status.textContent), elements.status.classList.contains('error'));
+  actionToast.message = relocalize(actionToast.message);
+  if (actionToast.undo) actionToast.undo.message = relocalize(actionToast.undo.message);
+  actionToast.render();
+  render({ resetScroll: false });
+  positionSettingsPanel();
+});
 restoreUiPreferences();
+persistUiPreferences();
 applyMainSortOptions();
 updateTabButtons();
 scheduleAutoRefresh();
