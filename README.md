@@ -1,12 +1,12 @@
 # VRChat Friends & Group Instance Viewer
 
-**Version: 1.6.1**
+**Version: 1.6.3**
 
 VRChatのフレンド、インスタンス、FavoriteワールドをChromeで一覧表示する非公式拡張機能です。
 
 - [Chrome Web Store](https://chromewebstore.google.com/detail/vrchat-friends-group-inst/pncejiodjgmlklhgkpclcplgacbohbla)
 - [ソースコード・配布](https://github.com/mos-vrc/vrchat-friends-and-group-instance-viewer)
-- [プライバシー](PRIVACY.md) / [認証・通信仕様](SECURITY.md)
+- [プライバシー](PRIVACY.md) / [認証・通信仕様](SECURITY.md) / [更新履歴](CHANGELOG.md)
 
 ## インストール
 

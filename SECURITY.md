@@ -1,138 +1,62 @@
-# Security / 通信仕様
+# Security / 認証・通信仕様
 
-このページは、VRChat Friends & Group Instance Viewer v1.6.1 の認証・通信仕様を確認しやすくするための補足資料です。
+本ページは現行の認証・通信・キャッシュ仕様を説明します。
 
-## VRChatログインセッション
+## 認証と通信先
 
-本拡張機能は、Chromeにすでに存在する有効なVRChatログインセッションを利用してVRChat APIへアクセスします。
+Chromeの既存VRChatログインセッションを使います。ユーザー名・パスワード・認証Cookie値・認証トークンの入力を求めず、cookies権限とchrome.cookies APIを使用しません。認証情報の読み取り・保存、独自のCookieヘッダー生成は行いません。
 
-拡張機能自身は以下を行いません。
+通常APIは`https://vrchat.com/api/1/`に限定します。`background.js`と`session.js`がHTTPS、ホスト、標準ポート、パスを検証し、URL内の資格情報を拒否します。Service Workerは自身の拡張機能からのメッセージだけを受け付け、任意のヘッダーを転送しません。APIのリダイレクトは拒否します。
 
-- VRChatのユーザー名・パスワードを要求する
-- 認証Cookie値や認証トークンの入力を要求する
-- `cookies` 権限を要求する
-- `chrome.cookies` APIを使用する
-- 認証Cookie値をJavaScriptから読み取る
-- 認証Cookie値や認証トークンを保存する
-- 独自に `Cookie` ヘッダーを生成する
+画像は`vrchat.com`、`api.vrchat.cloud`、`files.vrchat.cloud`に限定します。画像配信のリダイレクトはCSPと最終URLを検証します。前二者はChromeのCookie処理を使用し、files.vrchat.cloudは`credentials: omit`です。`blob:`は取得済み画像の表示に使用します。
 
-`background.js` のAPIアクセスでは `credentials: 'include'` を使用し、Chrome自身の通常のCookie処理によりVRChatのCookieが適用されます。
+開発者サーバーへのユーザーデータ送信、アクセス解析、外部テレメトリ、広告SDKはありません。
 
-## API通信先
+## リクエスト制御
 
-APIリクエストは `background.js` と `session.js` の両方で `https://vrchat.com/api/1/` に制限しています。
+- API通信は開始間隔250ms、同時実行2件を基本とし、本文読み取りを含め20秒でタイムアウトします。
+- Workerが複数画面の通信と429/5xxの待機を管理します。IndexedDBには待機期限の数値だけを保存します。
+- 実行中の同一GETを共有し、同一アカウントの詳細取得を統合します。キャッシュはアカウント単位です。
+- 画面非表示中は新しいGET、自動更新、Hydrationを待機します。送信済みの通信と明示的な変更の結果処理は継続する場合があります。
+- 401時は表示情報を消去し、古い非同期応答の反映を止めます。
+- Favorite・フレンド一覧は最大100件を要求し、実際の返却件数でoffsetを進めます。短い応答だけで終了せず、空ページ・繰り返し・安全上限を確認します。
+- 足跡は取得不可ワールドが省かれる場合を考慮し、50件単位のページで取得します。
 
-`background.js` の `isAllowedApiUrl()` は以下を確認します。
+## Favoriteの登録・移動・解除
 
-- HTTPSであること
-- ホスト名が `vrchat.com` であること
-- パスが `/api/1/` から始まること
+明示的な操作に限り、`POST /favorites`と`DELETE /favorites/{favoriteId}`を使用します。フレンドは`type: friend`、ワールドは`type: world`または`type: vrcPlusWorld`と対象ID・登録先の内部タグを送信します。表示名を内部タグとして使用しません。
 
-通常APIの送信先は引き続き `https://vrchat.com/api/1/` に限定しています。画像本文取得のため、`manifest.json` の `connect-src` とHost permissionでは `https://vrchat.com`、`https://api.vrchat.cloud`、`https://files.vrchat.cloud` を許可しています。
+ワールドの変更前には所属のライブ状態を確認し、移動・登録では公開状態または自身の所有を確認します。取得不可ワールドは解除のみ可能です。ワールドFavoriteの操作用状態は同じアカウントのメモリで最大5分共有します。成功が確認できた登録・移動・解除はAPI応答を反映します。
 
-## 画像の読み込み先
+明確な拒否で移動先への登録に失敗した場合は元の登録の復元を試みます。タイムアウト、通信切断、5xx、不正な成功応答などで結果が不明な場合は、POST/DELETE/PUTの自動再送・自動ロールバックを行いません。「戻す」は現在の所属を再確認してから実行します。
 
-表示用画像については `manifest.json` のCSPで以下を許可しています。
+## Favoriteリスト名
 
-- `https://vrchat.com`
-- `https://api.vrchat.cloud`
-- `https://files.vrchat.cloud`
+`PUT /favorite/group/{type}/{groupName}/{userId}`の許可経路だけを使用し、本文は`displayName`のみ、空欄と20文字超過を拒否します。
 
-これらはVRChat関連コンテンツの表示用途です。`blob:`は取得済み画像データをローカルに表示するために許可します。
+Workerはfriendの`group_0`〜`group_2`、worldの`worlds0`または正の整数付きタグ、vrcPlusWorldの正の整数付きタグを検証します。種類とタグの不一致、クエリ、余分な本文フィールドを拒否します。対象は認証済みアカウントのリストです。
 
-## 開発者サーバーへの送信
+保存前後にリスト情報を確認します。ワールドの名称変更ではFavorite全件を読み直しません。結果が不明な保存は再送せず、更新や公式ページで確認するよう案内します。
 
-v1.6.1には、開発者独自サーバーへフレンド情報、インスタンス情報、認証情報等を送信する処理はありません。
+## ワールド情報と足跡
 
-Google Analytics、Sentry、広告SDK等の外部分析・テレメトリも使用していません。
+選択リストのワールド情報は`GET /favorites/groups/{world|vrcPlusWorld}/{actualName}`でまとめて取得し、確認済みの所属IDだけを取り込みます。未対応または不足した行は、共有キャッシュ・通信制限付きの`GET /worlds/{worldId}`で補完します。認証・429・サーバー障害では大量の個別取得へ切り替えません。
 
-確認する場合は、主に以下のファイルをご覧ください。
+足跡は認証済みAPIへのGETで取得して同一アカウントのメモリに保持します。独自の訪問日時・回数記録、ゲームログの読み取り、参照不可Favoriteの自動削除は行いません。アカウント変更、キャッシュ削除、認証切れで古い応答を破棄します。
 
-- `manifest.json` — 権限、Host permission、CSP
-- `background.js` — API URL制限、`credentials: 'include'`、User-Agentヘッダー処理
-- `session.js` — VRChat API URLの検証とService Workerへの通信
-- `config.js` — API Base URL
-- `api.js` — VRChat APIエンドポイントとリクエスト処理
+URLコピーはユーザーのクリックで公式URLを書き込み、クリップボード内容を読み取りません。
 
-## User-Agent
+## Offlineと画像
 
-VRChat APIクライアントを識別できるよう、通常のChrome User-Agentへ以下を追記します。
+Offlineの対象は認証済みユーザーのofflineFriendsです。オンライン情報を優先し、不足するプロフィール情報を一覧APIで取得します。20人以内の不足だけ個別取得で補完します。404の参照不可状態は10分間再利用し、Favorite登録を削除せず表示と人数から除外します。最終アクティブ日時はUTC値と確認時刻を保存し、10分間再利用して表示時にブラウザのタイムゾーンへ変換します。
 
-`VRChatFriendsGroupInstanceViewer/<version> (contact @mos_vrc)`
+画像は検証したPNG/JPEG/GIF/WebP/AVIFをメモリ上のBlobとして共有します。画像本文を拡張機能の永続ストレージへ保存しません。各画面で最大10並列、開始間隔50ms、20秒のタイムアウト、単一画像8MiBの上限を設けます。429はRetry-Afterに従って待機し、失敗の自動再送は行いません。サイズ指定URLの400/404/415だけ元URLへ1回フォールバックします。
 
-この処理には `declarativeNetRequestWithHostAccess` を使用します。Cookieヘッダーを追加・変更するためには使用しません。
+画像キャッシュは32MiBまたは256エントリを超えると未使用の古い画像から整理します。アカウント変更・認証切れ・キャッシュ削除で破棄します。
 
-## 検証用ハッシュ
+## 検証と関連文書
 
-各拡張機能ファイルのSHA-256は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。この動作確認用パッケージでは未作成のGitHub Release ZIPのハッシュは掲載しません。
-
-## v1.6.1の通信制御
-
-- APIはHTTPS・vrchat.comの標準ポート・/api/1/以下へ制限し、URL内の資格情報を拒否します。
-- Workerは自身の拡張機能からのメッセージだけ受け付け、使用するGET/POST/DELETEと、名称変更専用のPUT以外のメソッドを拒否します。外部から渡された任意のヘッダーを転送せず、Acceptと必要なContent-Typeだけを設定します。
-- fetchのリダイレクトを拒否します。1回の通信には本文読み取りも含め20秒のタイムアウトを設けます。
-- 同一Workerが複数画面の開始間隔・同時実行・429/5xx待機をまとめて管理します。IndexedDBには待機期限の数値だけを保存します。認証情報は保存しません。
-- GETの同じ実行中URLは共有し、同一アカウント内の詳細取得も統合します。キャッシュはアカウント単位です。
-- 画面が非表示の間は新しいGETと自動更新・Hydrationを待機します。すでに送信したリクエストやユーザーが実行した変更の結果処理は継続する場合があります。
-- 401時は左右一覧・プレビューを消去し、古い非同期処理を無効にします。
-
-## Favorite変更操作
-
-v1.5 では、ユーザーが明示的にFavoriteメニューを操作した場合に限り、VRChat APIの `POST /favorites` および `DELETE /favorites/{favoriteId}` を使用してFriend Favoriteを登録・移動・解除します。認証方式は他のAPI通信と同じで、Chromeの既存VRChatログインセッションを利用し、拡張機能JavaScriptからCookie値を読み取り・保存・手動送信しません。
-
-Favorite List移動のロールバックは、削除後の再登録そのものが失敗した場合だけ実行します。変更成功後のFavorite一覧再同期が失敗した場合は、成功済みの変更を取り消さずローカル状態へ反映し、次回更新時に再同期します。
-
-
-変更要求のタイムアウト・通信切断・5xx・不正な成功応答などでは、サーバー側で処理済みの可能性があります。その場合はPOST/DELETE/PUTの自動再送やFavorite移動の自動ロールバックを行いません。更新で状態を確認するよう案内します。明確な拒否応答で再登録に失敗した場合は、従来どおり元のFavorite Listの復元を試みます。
-
-## Favorite List名の変更
-
-明示的な保存操作でのみ `PUT /favorite/group/friend/{groupName}/{userId}` を使用します。対象は自身のアカウントのgroup_0〜group_2で、本文にはdisplayNameだけを送信します。WorkerはこのPUT経路以外と、不正な本文・空欄・20文字超過を拒否します。Favorite Listの公開範囲、所属、内部IDを変更しません。
-
-成功後はFavorite Groupメタデータを1回取得して表示名を確認し、アカウントごとの既存Favoriteキャッシュを更新します。再確認だけが失敗した場合は保存済みの名前を保持します。保存要求の結果が不明な場合は自動再送せず、手動更新での確認を案内します。認証切れ・アカウント変更・キャッシュ削除後の遅い応答は表示とキャッシュへ反映しません。
-
-## v1.6.1の画像取得
-
-- images.jsは画像本体をGETで取得し、検証したPNG/JPEG/GIF/WebP/AVIFのバイト列をメモリ上のBlobとして共有。IndexedDB/localStorageへ画像本体や署名URLを新たに保存しない。
-- URLはHTTPSのVRChat関連3ホストに限定し、URL内のユーザー名/パスワードを拒否。/api/以下は/api/1/image/または/api/1/file/だけ許可し、/auth等の認証APIへ画像としてアクセスしない。
-- 画像のリダイレクトは配信先の解決に必要なため許可。ただしCSPで通信先を3ホストへ限定し、最終URLも再確認。通常APIのリダイレクト拒否は維持。
-- vrchat.com/api.vrchat.cloudへの画像GETはChrome自身のCookie機構を使う。files.vrchat.cloudへの直接GETはcredentials:omit。Cookie値・認証トークンをJSから読む処理はない。
-- 自身の拡張機能を開始元とするvrchat.com/api.vrchat.cloudの/api/1/通信にUser-Agentを付与。Cookieヘッダーの生成・変更はしない。
-- 各Viewer画面で最大10並列、開始間隔50ms。画像本文を含む20秒で中断し、単一画像は8MiBまで。429はRetry-Afterに従ってその画面の次の画像取得を停止。タイムアウト・通信失敗・429で自動再送せず、サイズ指定URLの400/404/415だけ元URLへ1回フォールバック。
-- 同じ取得URLの要求は1つの処理に統合し、複数imgへ同じBlob URLを設定。すべての利用者が消えた未完了要求をキャンセル。アカウント変更、認証切れ、キャッシュ削除で画像データを消去し、旧応答を破棄。
-- 利用されていない画像を古い順に解放し、32MiBまたは256エントリを超えるキャッシュを整理。表示中の画像は参照があるため、この上限を超える場合もある。認証情報の永続保存は行わない。
-- 従来のWorker/APIの2並列制限とは別枠。10並列の画像枠は複数Viewer画面全体で共有するものではない。
-
-## Offline表示と操作の復元
-
-Offline対象は認証済みユーザーのofflineFriendsに限定し、オンライン一覧/onlineFriends/activeFriendsを優先して除外。キャッシュされたプロフィールの在席状態を使用しません。不足する名前・画像URLをoffline=trueのフレンド一覧へ最大100件を要求し、実際の応答件数でoffsetを進めて取得し、選択したIDに対応する表示情報だけを既存アカウント別キャッシュへ保存します。応答形状が不正、IDが揃わない、APIが失敗した場合は名前検索の完了を宣言しません。個別プロフィール要求への大量フォールバックはしません。OFF/非表示/認証切れ/アカウント変更/キャッシュ削除後の遅い応答を表示へ反映しません。権限と認証方式は変更しません。
-
-右側「その他」のOffline子セクションは折り畳み中にカード/画像要素を生成せず、展開時も画像本体は表示付近に限定します。名前一覧の取得は折り畳みと独立し、ユーザーの名前検索を可能にします。
-
-「戻す」は最新の確定したFavorite所属操作を対象とし、復元前にライブ所属を検証します。所属が変わっていた場合やライブ確認が失敗した場合は書き込みません。復元中の重複を防止し、結果不明のPOST/DELETEを再送しません。確認と書き込みの間の他画面操作はサーバー側の原子的な排他を保証できません。期限切れ・認証切れ・アカウント変更・キャッシュ削除で復元情報を破棄します。
-
-Offline一覧は公式Webサイトのパラメーター構成に合わせ、vパラメーターを使用しません。短いページでは終了せず、必要な名前が揃うか空ページに達するまで継続します。同一ページの繰り返しとページ上限で終了を保証します。不足時のConsole診断には人数・ページ数・offset・最後の件数・停止理由・HTTP状態・補完の試行/成功/情報取得不可/失敗件数・状態コード別件数だけを含め、ユーザーID・名前・認証情報は記録しません。
-
-一覧終了時に未取得の名前が20人以内残った場合だけ、該当IDをGET /users/{userId}で順番に補完します。同時要求は共有し、Worker全体のAPI開始間隔250ms・最大2並列の制御を通します。補完は逐次実行し、名前・画像URL等の表示用フィールドだけを保存します。403は次のIDへ進み、404は参照不可として一覧と人数から除外して次のIDへ進み、それ以外の失敗はそこで補完を中断します。401はセッション失効処理を行います。取得失敗を成功として扱わず、次の更新時に再試行できます。残りが21人以上なら大量の個別取得は行いません。
-
-404確認結果は表示用のアカウント別キャッシュへ、IDをキーにnull/status=404/cachedAtだけを保存して10分再利用します。404を理由にユーザーやFavoriteの登録データを変更・削除しません。参照不可の原因を推測したタグやBAN情報は保存しません。通信失敗・403・不正な200応答は参照不可として除外しません。
-
-Offlineの日時表示用としてlast_activityのUTC文字列とローカル確認時刻lastActivityCheckedAtを表示用キャッシュへ保存します。日時の鮮度は10分で判定し、次の読み込み時に一括一覧を更新します。名前キャッシュが有効でも、日時が未確認・古い場合は追加の一覧通信が発生します。UTC値は保存時に書き換えず、表示時のみブラウザのタイムゾーンへ変換します。last_loginや認証情報はこの追加機能で保存しません。在席判定に最終アクティブ日時は使用しません。
-
-## ワールドFavorite（v1.6.1）
-
-ワールド画像右上のメニューで明示的に操作した場合だけ、同じFavorite APIへ `type: world` または `type: vrcPlusWorld` とワールドID・登録先タグを指定して変更します。Friend Favoriteの所属とは別に扱います。ワールドの登録状態は同一アカウント内のメモリで最大5分共有し、変更・取り消しの直前にはライブ状態を確認します。通常の更新やアカウントの切り替えで別アカウントの記録を引き継ぎません。確定した移動失敗時には元の登録を復元し、結果不明の書き込みは再送しません。撮影用ビルドの操作は実APIへ送信しません。
-
-## Recent worlds
-
-訪問ワールドは既存の認証済みAPIクライアントとリクエスト制限を使ったGETのみで取得します。外部サーバーへ履歴を送信せず、同じアカウントのメモリ内にのみ保持します。アカウント変更・キャッシュ削除・401時に消去し、世代と要求トークンで古い応答を破棄します。新しい権限やCookie読み取りは追加していません。
-
-## World management (v1.6.1)
-
-Selected Favorite world lists use the existing typed `/favorite/groups` and `/favorites` reads. World details first use `GET /favorites/groups/{world|vrcPlusWorld}/{actualName}` for the selected list. Only world IDs in the existing validated membership snapshot, with matching type/tags when present, are imported. Unsupported endpoints or missing rows fall back to `GET /worlds/{worldId}` with bounded workers, the shared request policy and same-account memory caching. Authentication, rate-limit and server-outage errors do not trigger bulk individual fallback. Unavailable rows are retained for user-directed removal; there is no automatic deletion, personal visit tracking or log-file access.
-
-List renaming uses `PUT /favorite/group/{world|vrcPlusWorld}/{actualName}/{authenticatedUserId}` with `displayName` only, a validated 20-character name, a live preflight and a readback. Uncertain writes are not replayed. Clipboard buttons copy official URLs on a direct click and do not read clipboard contents. No new extension permissions, external services, account credentials or persistent backups are introduced.
-
-### Worker rename validation (v1.6.1)
-
-The worker's PUT allowlist accepts only `/favorite/group/friend/group_[012]/usr_...`, `/favorite/group/world/worlds{0 or positive integer}/usr_...`, and `/favorite/group/vrcPlusWorld/vrcPlusWorlds{positive integer}/usr_...`. Query strings, type/name mismatches, other endpoints and bodies containing fields other than `displayName` remain rejected. World registration writes, cookie handling, permissions and request throttling are unchanged. Successful unavailable-world tombstone payloads are normalized for display; registration records are never deleted automatically.
+- [プライバシーポリシー](PRIVACY.md)
+- [検証内容](VALIDATION.md)
+- [ファイルのSHA-256](SOURCE_FILES_SHA256.txt)
+- [更新履歴](CHANGELOG.md)

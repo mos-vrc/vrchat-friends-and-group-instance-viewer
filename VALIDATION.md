@@ -1,11 +1,19 @@
-# v1.6.1 Mist validation
+# 検証内容 / Validation
 
-Sage has been replaced by Mist: pale neutral gray surfaces, charcoal text, muted blue-gray accent, light color scheme. Saved sage preferences migrate to mist. There are six theme options, with localized Mist/ミスト labels.
+## Pagination policy
 
-Theme settings use one nonwrapping row with a flexible label and right-aligned swatches. Browser checks measure that label and controls share a center line, all six swatches share one row, and controls align with the settings row right edge at 320/620/860/1280px. At 320px this verifies the settings panel; full-page layout checks apply at 620px and above.
+Favorites (world, vrcPlusWorld and friend) and online/Offline friend lists request n=100. The offset still advances by the actual returned array length. An empty page confirms completion; a short page is not treated as completion. Validation, duplicate-page detection, abort and safety limits remain active. Request concurrency and rate-limit waiting follow the shared request policy.
 
-Fresh Chromium checks passed: 9 screenshot UI groups plus 2 production release/view groups. Covers both languages, six themes, three sizes, normal/simple world consistency, all instance filters/Friends/world views, image rendering, theme persistence and retired Sage migration. Japanese Mist world/settings screenshots reviewed. The v1.6 browser regression suite previously passed 47 groups.
+Sources reviewed on 2026-10-09 (community-maintained API specifications, not official VRChat documentation):
+- https://vrchat.community/reference/get-favorites — n: 1–100, zero-based offset.
+- https://vrchat.community/reference/get-friends — n: 1–100; offline flag.
+- https://vrchat.community/reference/get-recent-worlds — n: 1–100. Recent keeps the previously observed 50-slot window because inaccessible rows can be filtered. Returned length does not reveal consumed slots or a server cap, so increasing its offset blindly risks skipping worlds.
 
-Production uses controlled API responses. Screenshot UI is served locally with package CSP and a runtime URL shim. No actual service worker installation or real-account writes are claimed. Version remains 1.6.1. README contains usage only; updates are in CHANGELOG. Production permissions/endpoints are unchanged.
+Typed group-content batch loading, shared in-flight reads, cached world details and confirmed Favorite-write updates prevent individual or duplicate requests. Endpoints without documented pagination are not given speculative paging parameters.
 
-JS syntax and JSON checks, ZIP integrity and source SHA-256 hashes passed. Web Store package has no dummy data.
+## Verification
+
+Pagination checks cover complete IDs/order, server cap 50, Offline parameters, empty/exact-100 lists, repeated pages, abort, 403/429 propagation and Recent filtered rows/final-page repetition. Favorite tests cover add/move/remove/undo, unavailable worlds, sparse/legacy/VRC+ list metadata, external conflicts and uncertain writes. Chromium checks cover Friend hydration after cache deletion/reopen, release UI, feedback/retry and unavailable-world safety. Browser API writes use controlled responses; no live account data is changed. This Chromium is tested using local HTTP, package CSP and a runtime shim, not installed-extension service-worker verification.
+
+
+Results: 7 pagination checks, 30 Favorite checks, 27 production Chromium checks and 8 screenshot Chromium checks passed (72 total). JavaScript syntax, JSON, ZIP integrity and source hashes passed for the generated variants.

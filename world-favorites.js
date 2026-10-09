@@ -1,3 +1,4 @@
+import { CONFIG } from './config.js';
 import { worldIsUnavailable } from './world-catalog.js';
 // World lists are separate from friend lists. Keep only a same-account memory
 // snapshot; use the existing session client and request policy for every call.
@@ -14,7 +15,11 @@ export class WorldFavorites {
     this.inflight=this.read().finally(()=>{this.inflight=null});
     return this.inflight;
   }
-  async read() {
+  async refreshGroups() {
+    if(this.inflight)await this.inflight;
+    return this.read(false);
+  }
+  async read(includeRecords=true) {
     const groups=[],limits=new Map(),capacities=new Map();
     // The website's typed endpoint includes account-specific slot limits and
     // empty list metadata. Names are internal tags; labels never become tags.
@@ -44,12 +49,12 @@ export class WorldFavorites {
       }
     }
     const worldGroups=groups.filter(validGroup).map(g=>({type:g.type,name:g.name,label:g.displayName||g.display_name||g.name,key:`${g.type}:${g.name}`,capacity:capacities.get(g.type)}));
-    const records=new Map();
+    const records=includeRecords?new Map():this.records;
     // Empty lists can be absent from metadata. Validate record tags by their
     // typed API names rather than requiring a metadata row for every tag.
     const types=[...TYPES].filter(type=>limits.get(type)>0);
-    for(const type of types) {
-      const rows=await this.api.fetchListPages(offset=>this.api.fetchJson(`/favorites?type=${type}&n=50&offset=${offset}`),5000,
+    for(const type of includeRecords?types:[]) {
+      const rows=await this.api.fetchListPages(offset=>this.api.fetchJson(`/favorites?type=${type}&n=${CONFIG.API_PAGE_SIZE}&offset=${offset}`),5000,
         r=>r && /^fvrt_[A-Za-z0-9_-]+$/.test(r.id||'') && validId(r.favoriteId) && (!r.type||r.type===type)
           && Array.isArray(r.tags) && r.tags.length>0 && r.tags.every(name=>validGroup({type,name})),r=>r.id);
       for(const row of rows){const list=records.get(row.favoriteId)||[];list.push({id:row.id,type,tags:[...new Set(row.tags)]});records.set(row.favoriteId,list)}
@@ -75,7 +80,7 @@ export class WorldFavorites {
     worldGroups.sort((a,b)=>(a.type==='world'?0:1)-(b.type==='world'?0:1)
       || Number(a.name.match(/\d+$/)[0])-Number(b.name.match(/\d+$/)[0]));
     worldGroups.forEach((g,i)=>{if(g.synthetic)g.label=`Favorite Worlds ${i+1}`});
-    this.groups=worldGroups;this.records=records;this.ready=true;this.updatedAt=Date.now();return this;
+    this.groups=worldGroups;this.records=records;if(includeRecords){this.ready=true;this.updatedAt=Date.now()}return this;
   }
   current(worldId) { return (this.records.get(worldId)||[]).map(r=>({...r,tags:[...r.tags]})); }
   members(key) {
@@ -90,12 +95,12 @@ export class WorldFavorites {
     if(this.pending || !/^usr_[A-Za-z0-9_-]+$/.test(this.account||'') || !name || name.length>20 || /[\r\n\u0000]/.test(name))throw new Error('Invalid world list name');
     this.pending=true;
     try {
-      await this.load(true);
+      if(!this.ready)await this.load(true);else await this.refreshGroups();
       const group=this.groups.find(g=>g.key===key);
       if(!group || group.label!==expectedLabel){const e=new Error('World list changed elsewhere');e.favoriteConflict=true;throw e}
       if(group.label===name)return;
       await this.api.fetchJson(`/favorite/group/${group.type}/${group.name}/${encodeURIComponent(this.account)}`,{method:'PUT',body:JSON.stringify({displayName:name})});
-      try{await this.load(true)}catch(e){e.outcomeUnknown=true;throw e}
+      try{await this.refreshGroups()}catch(e){e.outcomeUnknown=true;throw e}
       if(this.groups.find(g=>g.key===key)?.label!==name){const e=new Error('World list rename unconfirmed');e.outcomeUnknown=true;throw e}
     } finally {this.pending=false}
   }
@@ -156,9 +161,12 @@ export class WorldFavorites {
         throw error;
       }
       if(created.length)this.records.set(worldId,created);else this.records.delete(worldId);
-      let syncFailed=false,syncError=null;
-      try{await this.load(true)}catch(e){if(e?.name==='AbortError')throw e;syncFailed=true;syncError=e;this.updatedAt=0}
-      return {previous,expected:created,syncFailed,syncError};
+      // DELETE succeeded and every POST response has been validated. Apply
+      // those confirmed records to the fresh preflight snapshot rather than
+      // downloading every account Favorite a second time. Failures still use
+      // the existing single reconciliation path in the caller.
+      this.updatedAt=Date.now();
+      return {previous,expected:created,syncFailed:false,syncError:null};
     } finally {this.pending=false}
   }
 }
