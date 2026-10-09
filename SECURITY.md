@@ -1,6 +1,6 @@
 # Security / 通信仕様
 
-このページは、VRChat Friends & Group Instance Viewer v1.5.4.23 の認証・通信仕様を確認しやすくするための補足資料です。
+このページは、VRChat Friends & Group Instance Viewer v1.6.1 の認証・通信仕様を確認しやすくするための補足資料です。
 
 ## VRChatログインセッション
 
@@ -42,7 +42,7 @@ APIリクエストは `background.js` と `session.js` の両方で `https://vrc
 
 ## 開発者サーバーへの送信
 
-v1.5.4.23には、開発者独自サーバーへフレンド情報、インスタンス情報、認証情報等を送信する処理はありません。
+v1.6.1には、開発者独自サーバーへフレンド情報、インスタンス情報、認証情報等を送信する処理はありません。
 
 Google Analytics、Sentry、広告SDK等の外部分析・テレメトリも使用していません。
 
@@ -66,7 +66,7 @@ VRChat APIクライアントを識別できるよう、通常のChrome User-Agen
 
 各拡張機能ファイルのSHA-256は [SOURCE_FILES_SHA256.txt](./SOURCE_FILES_SHA256.txt) に記載しています。この動作確認用パッケージでは未作成のGitHub Release ZIPのハッシュは掲載しません。
 
-## v1.5.4.23の通信制御
+## v1.6.1の通信制御
 
 - APIはHTTPS・vrchat.comの標準ポート・/api/1/以下へ制限し、URL内の資格情報を拒否します。
 - Workerは自身の拡張機能からのメッセージだけ受け付け、使用するGET/POST/DELETEと、名称変更専用のPUT以外のメソッドを拒否します。外部から渡された任意のヘッダーを転送せず、Acceptと必要なContent-Typeだけを設定します。
@@ -91,7 +91,7 @@ Favorite List移動のロールバックは、削除後の再登録そのもの�
 
 成功後はFavorite Groupメタデータを1回取得して表示名を確認し、アカウントごとの既存Favoriteキャッシュを更新します。再確認だけが失敗した場合は保存済みの名前を保持します。保存要求の結果が不明な場合は自動再送せず、手動更新での確認を案内します。認証切れ・アカウント変更・キャッシュ削除後の遅い応答は表示とキャッシュへ反映しません。
 
-## v1.5.4.23の画像取得
+## v1.6.1の画像取得
 
 - images.jsは画像本体をGETで取得し、検証したPNG/JPEG/GIF/WebP/AVIFのバイト列をメモリ上のBlobとして共有。IndexedDB/localStorageへ画像本体や署名URLを新たに保存しない。
 - URLはHTTPSのVRChat関連3ホストに限定し、URL内のユーザー名/パスワードを拒否。/api/以下は/api/1/image/または/api/1/file/だけ許可し、/auth等の認証APIへ画像としてアクセスしない。
@@ -118,3 +118,21 @@ Offline一覧は公式Webサイトのパラメーター構成に合わせ、vパ
 404確認結果は表示用のアカウント別キャッシュへ、IDをキーにnull/status=404/cachedAtだけを保存して10分再利用します。404を理由にユーザーやFavoriteの登録データを変更・削除しません。参照不可の原因を推測したタグやBAN情報は保存しません。通信失敗・403・不正な200応答は参照不可として除外しません。
 
 Offlineの日時表示用としてlast_activityのUTC文字列とローカル確認時刻lastActivityCheckedAtを表示用キャッシュへ保存します。日時の鮮度は10分で判定し、次の読み込み時に一括一覧を更新します。名前キャッシュが有効でも、日時が未確認・古い場合は追加の一覧通信が発生します。UTC値は保存時に書き換えず、表示時のみブラウザのタイムゾーンへ変換します。last_loginや認証情報はこの追加機能で保存しません。在席判定に最終アクティブ日時は使用しません。
+
+## ワールドFavorite（v1.6.1）
+
+ワールド画像右上のメニューで明示的に操作した場合だけ、同じFavorite APIへ `type: world` または `type: vrcPlusWorld` とワールドID・登録先タグを指定して変更します。Friend Favoriteの所属とは別に扱います。ワールドの登録状態は同一アカウント内のメモリで最大5分共有し、変更・取り消しの直前にはライブ状態を確認します。通常の更新やアカウントの切り替えで別アカウントの記録を引き継ぎません。確定した移動失敗時には元の登録を復元し、結果不明の書き込みは再送しません。撮影用ビルドの操作は実APIへ送信しません。
+
+## Recent worlds
+
+訪問ワールドは既存の認証済みAPIクライアントとリクエスト制限を使ったGETのみで取得します。外部サーバーへ履歴を送信せず、同じアカウントのメモリ内にのみ保持します。アカウント変更・キャッシュ削除・401時に消去し、世代と要求トークンで古い応答を破棄します。新しい権限やCookie読み取りは追加していません。
+
+## World management (v1.6.1)
+
+Selected Favorite world lists use the existing typed `/favorite/groups` and `/favorites` reads. World details first use `GET /favorites/groups/{world|vrcPlusWorld}/{actualName}` for the selected list. Only world IDs in the existing validated membership snapshot, with matching type/tags when present, are imported. Unsupported endpoints or missing rows fall back to `GET /worlds/{worldId}` with bounded workers, the shared request policy and same-account memory caching. Authentication, rate-limit and server-outage errors do not trigger bulk individual fallback. Unavailable rows are retained for user-directed removal; there is no automatic deletion, personal visit tracking or log-file access.
+
+List renaming uses `PUT /favorite/group/{world|vrcPlusWorld}/{actualName}/{authenticatedUserId}` with `displayName` only, a validated 20-character name, a live preflight and a readback. Uncertain writes are not replayed. Clipboard buttons copy official URLs on a direct click and do not read clipboard contents. No new extension permissions, external services, account credentials or persistent backups are introduced.
+
+### Worker rename validation (v1.6.1)
+
+The worker's PUT allowlist accepts only `/favorite/group/friend/group_[012]/usr_...`, `/favorite/group/world/worlds{0 or positive integer}/usr_...`, and `/favorite/group/vrcPlusWorld/vrcPlusWorlds{positive integer}/usr_...`. Query strings, type/name mismatches, other endpoints and bodies containing fields other than `displayName` remain rejected. World registration writes, cookie handling, permissions and request throttling are unchanged. Successful unavailable-world tombstone payloads are normalized for display; registration records are never deleted automatically.

@@ -1,8 +1,11 @@
-# v1.5.4.23 validation
+# v1.6.1 Mist validation
 
-- All three packages include matching Japanese and English Chrome message catalogs, default_locale=en, and valid manifest references for name, description and action.default_title. Catalog strings are nonempty and within metadata length limits.
-- Production HTML/JS/CSS match v1.5.4.22 byte-for-byte except version strings. Existing initial preferred-language selection, saved override and live UI switching are retained.
-- 13 screenshot browser checks passed: all themes/sizes/tabs, language switching, width resizing, Offline/OtherPlatform, local images and refresh. No API/external requests or JavaScript errors.
-- The local headless Chromium could not load an unpacked extension service worker, so Chrome-managed catalog selection and manifest substitution were validated structurally rather than through an installed-extension browser test.
-- English is the default catalog for unsupported Chrome UI languages. Chrome metadata follows Chrome UI language independently of the app language setting.
-- No new permissions. No store submission or real-account mutations.
+Sage has been replaced by Mist: pale neutral gray surfaces, charcoal text, muted blue-gray accent, light color scheme. Saved sage preferences migrate to mist. There are six theme options, with localized Mist/ミスト labels.
+
+Theme settings use one nonwrapping row with a flexible label and right-aligned swatches. Browser checks measure that label and controls share a center line, all six swatches share one row, and controls align with the settings row right edge at 320/620/860/1280px. At 320px this verifies the settings panel; full-page layout checks apply at 620px and above.
+
+Fresh Chromium checks passed: 9 screenshot UI groups plus 2 production release/view groups. Covers both languages, six themes, three sizes, normal/simple world consistency, all instance filters/Friends/world views, image rendering, theme persistence and retired Sage migration. Japanese Mist world/settings screenshots reviewed. The v1.6 browser regression suite previously passed 47 groups.
+
+Production uses controlled API responses. Screenshot UI is served locally with package CSP and a runtime URL shim. No actual service worker installation or real-account writes are claimed. Version remains 1.6.1. README contains usage only; updates are in CHANGELOG. Production permissions/endpoints are unchanged.
+
+JS syntax and JSON checks, ZIP integrity and source SHA-256 hashes passed. Web Store package has no dummy data.

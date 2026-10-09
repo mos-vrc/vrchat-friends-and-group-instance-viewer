@@ -5,7 +5,9 @@ function key(node) {
   const data = node.dataset;
   return node.id || (data.friendId ? 'friend:' + data.friendId : '')
     || (data.location ? 'location:' + data.location : '')
-    || (data.friendGroup ? 'group:' + data.friendGroup : '');
+    || (data.friendGroup ? 'group:' + data.friendGroup : '')
+    || (data.worldId ? 'world:' + data.worldId : '')
+    || (data.worldTab ? 'world-tab:' + data.worldTab : '');
 }
 
 export function patchElement(current, next) {

@@ -8,7 +8,7 @@ export const PERMISSION_LABELS = Object.freeze({
   [PERMISSIONS.INVITE_PLUS]: 'Invite+',
   [PERMISSIONS.GROUP]: 'Group',
   [PERMISSIONS.GROUP_PLUS]: 'Group+',
-  [PERMISSIONS.GROUP_PUBLIC]: 'Group Public',
+  [PERMISSIONS.GROUP_PUBLIC]: 'GroupPublic',
   [PERMISSIONS.PRIVATE]: 'Private',
   [PERMISSIONS.OFFLINE]: 'Offline',
   [PERMISSIONS.UNKNOWN]: 'Unknown',
@@ -19,7 +19,7 @@ const ONLINE_STATUS = Object.freeze({
   ONLINE: { className: 'online-active', label: 'Online' },
   ASK_ME: { className: 'online-ask-me', label: 'Ask Me' },
   DND: { className: 'online-dnd', label: 'Do Not Disturb' },
-  WEBSITE: { className: 'online-website', label: 'Other Platform' },
+  WEBSITE: { className: 'online-website', label: 'OtherPlatform' },
   OFFLINE: { className: 'online-offline', label: 'Offline' },
 });
 
@@ -246,22 +246,6 @@ export function isUserOfflineEquivalent(user) {
   return onlineStatusInfo(user).className === ONLINE_STATUS.OFFLINE.className;
 }
 
-/**
- * A non-friend owner is considered FOAF only when the Instance response
- * explicitly lists that owner in its `users` field. User-profile activity
- * fields are not used to infer presence because non-friend location/status
- * may be restricted or stale.
- */
-export function isFoafPresentInEntry(entry, user) {
-  if (!entry?.location || !user?.id) return false;
-  const apiUsers = Array.isArray(entry.instanceData?.users) ? entry.instanceData.users : null;
-  if (!apiUsers) return false;
-  return apiUsers.some((candidate) => {
-    const candidateId = typeof candidate === 'string' ? candidate : candidate?.id;
-    return candidateId === user.id;
-  });
-}
-
 export function normalizeUser(user, friendMap = null) {
   if (!user) return null;
   if (typeof user === 'string') {
@@ -411,8 +395,9 @@ export function mergeInstanceData(entry, data) {
 }
 
 export function instanceOwnerId(entry) {
-  const ownerId = entry?.ownerId || extractHumanOwnerId(entry?.instanceData, entry?.location);
-  return typeof ownerId === 'string' && ownerId.startsWith('usr_') ? ownerId : undefined;
+  const ownerId = entry?.ownerId;
+  return typeof ownerId === 'string' && ownerId.startsWith('usr_')
+    ? ownerId : extractHumanOwnerId(entry?.instanceData, entry?.location);
 }
 
 export function isFavoriteUser(user, favorites) {
@@ -457,42 +442,21 @@ export function friendsCountForEntry(entry, state, friendMap = new Map()) {
   return uniqueUsers(friends).length;
 }
 
-export function needsInstanceDetailsForFoaf(entry, state, friendMap = new Map()) {
-  if (!entry || !state || state.tab !== TABS.FAVORITE_PLUS) return false;
+// Owner information is independent of online status and Instance users.
+export function needsNonFriendOwnerProfile(entry, friendMap = new Map(), state = {}) {
+  if (!entry || state.showNonFriendOwners === false || state.tab === TABS.FAVORITE_ONLY) return false;
   const ownerId = instanceOwnerId(entry);
-  if (!ownerId || friendMap.has(ownerId)) return false;
-  // A group-instance summary or a cached partial instance may have an owner
-  // but no `users` list. Fetch the full Instance object so FOAF presence can
-  // be verified instead of inferred.
-  if (Array.isArray(entry.instanceData?.users)) return false;
-  return !entry.foafChecked && !entry.instanceFetchFailed;
+  return Boolean(ownerId && !friendMap.has(ownerId) && !entry.ownerUser && !entry.ownerUserLoaded);
 }
 
-export function needsNonFriendOwnerProfile(entry, friendMap = new Map()) {
-  if (!entry) return false;
-  const ownerId = instanceOwnerId(entry);
-  if (!ownerId || friendMap.has(ownerId)) return false;
-  const isGroupInstance = [
-    PERMISSIONS.GROUP,
-    PERMISSIONS.GROUP_PLUS,
-    PERMISSIONS.GROUP_PUBLIC,
-  ].includes(entry.permission);
-  if (!isGroupInstance) return false;
-  return !entry.ownerUser && !entry.ownerUserLoaded;
-}
-
-export function shouldFetchNonFriendOwner(entry, state, friendMap = new Map()) {
-  if (!entry || !state || state.tab !== TABS.FAVORITE_PLUS) return false;
-  const ownerId = instanceOwnerId(entry);
-  if (!ownerId || friendMap.has(ownerId)) return false;
-  if (entry.ownerUser || entry.ownerUserLoaded) return false;
-
-  // Only an explicit owner ID in Instance `users` qualifies as FOAF presence.
-  if (!Array.isArray(entry.instanceData?.users)) return false;
-  return entry.instanceData.users.some((candidate) => {
-    const candidateId = typeof candidate === 'string' ? candidate : candidate?.id;
-    return candidateId === ownerId;
-  });
+export function nonFriendOwnerForEntry(entry, state, friendMap = new Map()) {
+  if (!entry || state.showNonFriendOwners === false || state.tab === TABS.FAVORITE_ONLY) return null;
+  const id = instanceOwnerId(entry);
+  if (!id || friendMap.has(id)) return null;
+  const known = [entry.ownerUser, entry.instanceData?.owner, entry.instanceData?.creator,
+    ...(Array.isArray(entry.instanceData?.users) ? entry.instanceData.users : [])]
+    .find(user => user && typeof user === 'object' && user.id === id);
+  return known || {id, displayName:id};
 }
 
 export function participantsForEntry(entry, state, friendMap) {
@@ -506,36 +470,18 @@ export function participantsForEntry(entry, state, friendMap) {
     : [];
   const combined = uniqueUsers([...(entry?.friends || []), ...apiUsers]);
   const ownerId = instanceOwnerId(entry);
-  const ownerKnown = ownerId
-    ? [
-        ...(entry?.ownerUser ? [entry.ownerUser] : []),
-        ...(entry.instanceData?.owner && typeof entry.instanceData.owner === 'object' ? [entry.instanceData.owner] : []),
-        ...apiUsers,
-        ...(entry?.friends || []),
-      ].find((user) => user?.id === ownerId) || null
-    : null;
-
   if (state.tab === TABS.FAVORITE_PLUS || state.tab === TABS.FAVORITE_ONLY) {
     const friendIds = new Set(state.friends.map((friend) => friend.id).filter(Boolean));
     const selectedFriends = combined
       .filter((user) => friendIds.has(user.id))
       .filter((user) => state.tab !== TABS.FAVORITE_ONLY || state.favorites.has(user.id));
 
-    // A non-friend owner is allowed to be shown, but only when this instance
-    // has at least one qualifying Favorite friend. This prevents a Favorite+
-    // card from containing only an unrelated non-friend owner.
-    const selected = [...selectedFriends];
-    if (selectedFriends.length > 0 && ownerKnown && !friendIds.has(ownerKnown.id)
-      && isFoafPresentInEntry(entry, ownerKnown)) {
-      selected.unshift(ownerKnown);
-    }
-    return uniqueUsers(selected);
+    return uniqueUsers(selectedFriends);
   }
 
-  const withKnownOwner = ownerKnown && !combined.some((user) => user?.id === ownerKnown.id)
-    ? [ownerKnown, ...combined]
-    : combined;
-  return uniqueUsers(withKnownOwner);
+  // Non-friend owners belong in a separate information frame, never in the
+  // normal participant list, even when users explicitly includes the owner.
+  return combined.filter(user => user.id !== ownerId || friendMap.has(user.id));
 }
 
 export function sortParticipants(entry, participants, state) {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>VRChat Friends &amp; Group Instance Viewer v1.5.4.23</title>
+  <title>VRChat Friends &amp; Group Instance Viewer v1.6.1</title>
   <link rel="stylesheet" href="index.css">
 </head>
 <body data-theme="dark-blue" data-instance-display="normal">
@@ -51,6 +51,10 @@
     <main id="mainPane" class="main-pane">
       <section class="toolbar">
         <div class="toolbar-left">
+          <div class="toolbar-refresh">
+          <button id="reloadButton" class="reload-button" type="button" title="最新情報を取得" aria-label="更新"><svg class="reload-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.66 17.66A8 8 0 1 1 20 12M20 5v7h-7"/></svg></button>
+            <span class="refresh-divider" aria-hidden="true"></span>
+          </div>
           <div class="tabs" role="tablist" aria-label="表示切替">
             <div class="instance-tab-segment" role="presentation">
               <button class="tab instance-view-tab" data-view="instances" data-filter="all" role="tab" aria-selected="false" title="フレンドがいるすべてのインスタンスを表示">すべて</button>
@@ -62,14 +66,14 @@
           </div>
           <span class="toolbar-divider" aria-hidden="true"></span>
           <select id="sort" class="sort" aria-label="並び順">
-            <option value="friends_desc">フレンドが多い順</option>
-            <option value="users_desc">参加人数が多い順</option>
+            <option value="friends_desc" title="フレンドが多い順">フレンド順</option>
+            <option value="users_desc" title="参加人数が多い順">参加人数順</option>
           </select>
           <span id="updatedAt" class="updated-at" title="最終更新">更新: --:--:--</span>
         </div>
 
         <div class="toolbar-options">
-          <button id="reloadButton" class="reload-button" type="button" title="最新情報を取得">更新</button>
+          <button id="recentButton" class="recent-button reload-button" type="button" title="ワールド管理" aria-label="ワールド管理" aria-pressed="false"><svg class="recent-globe-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18M5 7h14M5 17h14"/></svg></button>
           <button id="settingsButton" class="settings-button" type="button"
                   aria-label="オプション" aria-expanded="false" aria-controls="settingsPanel"
                   title="オプション"><span class="settings-icon" aria-hidden="true">⚙</span></button>
@@ -88,6 +92,10 @@
             </div>
 
             <div class="settings-row offline-sort-settings"><label class="settings-label" for="offlineSort">Offline内の並び順</label><select id="offlineSort"><option value="name">名前順</option><option value="recent">最終アクティブが新しい順</option><option value="oldest">最終アクティブが古い順</option></select></div>
+            <div class="settings-row owner-settings">
+              <label class="settings-label" for="showNonFriendOwners">フレンド外のインスタンスオーナーを表示</label>
+              <input id="showNonFriendOwners" class="settings-switch" type="checkbox" role="switch">
+            </div>
             <div class="settings-row">
               <span class="settings-label">表示サイズ</span>
               <div class="instance-size-control" role="group" aria-label="表示サイズ">
@@ -105,12 +113,18 @@
               </select>
             </div>
 
-            <div class="settings-row">
+            <div class="settings-row theme-settings">
               <span class="settings-label">テーマ</span>
               <div class="theme-control" role="radiogroup" aria-label="テーマ">
                 <button class="theme-button theme-button-light" type="button"
                         data-theme="light" role="radio" aria-checked="false"
                         aria-label="ライト" title="ライト"></button>
+                <button class="theme-button theme-button-sand" type="button"
+                        data-theme="sand" role="radio" aria-checked="false"
+                        aria-label="サンド" title="サンド"></button>
+                <button class="theme-button theme-button-mist" type="button"
+                        data-theme="mist" role="radio" aria-checked="false"
+                        aria-label="ミスト" title="ミスト"></button>
                 <button class="theme-button theme-button-ash" type="button"
                         data-theme="ash" role="radio" aria-checked="false"
                         aria-label="アッシュ" title="アッシュ"></button>

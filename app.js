@@ -1,3 +1,7 @@
+import { readFailureMessage } from './ui-feedback.js';
+import { WorldCatalog, worldPlatforms, worldIsUnavailable } from './world-catalog.js';
+import { fetchRecentWorlds } from './recent-worlds.js';
+import { WorldFavorites } from './world-favorites.js';
 import { SidebarResizer } from './sidebar-resize.js';
 import { t, lt, captureStaticLabels, setLocale, getLocale, relocalize, initialLanguage } from './i18n.js';
 import { normalizeSearch, friendSearchText, matchesSearch, activityComparison } from './view-query.js';
@@ -21,9 +25,8 @@ import {
   friendStateText,
   instanceOwnerId,
   mergeInstanceData,
-  needsInstanceDetailsForFoaf,
   needsNonFriendOwnerProfile,
-  isFoafPresentInEntry,
+  nonFriendOwnerForEntry,
   normalizeFriends,
   normalizeUser,
   onlineStatusInfo,
@@ -34,7 +37,6 @@ import {
   regionLabel,
   sortParticipants,
   uniqueUsers,
-  shouldFetchNonFriendOwner,
   safeImageUrl,
   sizedImageUrl,
 } from './domain.js';
@@ -57,12 +59,14 @@ const elements = {
   offlineSearchStatus: document.getElementById('offlineSearchStatus'),
   sort: document.getElementById('sort'),
   offlineSort: document.getElementById('offlineSort'),
+  showNonFriendOwners: document.getElementById('showNonFriendOwners'),
   settingsButton: document.getElementById('settingsButton'),
   settingsPanel: document.getElementById('settingsPanel'),
   friendSort: document.getElementById('friendSort'),
   instanceDisplay: document.getElementById('instanceDisplay'),
   autoRefresh: document.getElementById('autoRefresh'),
   reloadButton: document.getElementById('reloadButton'),
+  recentButton: document.getElementById('recentButton'),
   clearCacheButton: document.getElementById('clearCacheButton'),
   actionToast: document.getElementById('actionToast'),
   friendInstancePreview: document.getElementById('friendInstancePreview'),
@@ -71,10 +75,14 @@ const elements = {
 
 const uiStorage = new JsonStorage();
 let repository = new DataRepository(new VrchatApiClient(), uiStorage);
+let worldFavorites = null;
+let worldCatalog = new WorldCatalog();
+let worldView = { selected: 'recent', loading: false, error: null, token: 0, editor: null };
 
 const VIEW_MODES = Object.freeze({
   INSTANCES: 'instances',
   FRIENDS: 'friends',
+  RECENT: 'recent',
 });
 
 const FRIEND_VIEW_SORTS = Object.freeze({
@@ -90,6 +98,7 @@ const locationCacheReader = Object.freeze({
 });
 
 const state = {
+  recent: { account: '', rows: [], ready: false, loading: false, error: null, token: 0 },
   viewMode: VIEW_MODES.INSTANCES,
   tab: TABS.FAVORITE_PLUS,
   sort: SORTS.FRIENDS_DESC,
@@ -98,6 +107,7 @@ const state = {
   instanceDisplay: 'normal',
   friendSort: 'favorite_list',
   offlineSort: 'name',
+  showNonFriendOwners: false,
   displayLimits: new Map(),
   theme: 'dark-blue',
   autoRefreshMinutes: 0,
@@ -117,6 +127,8 @@ const state = {
   friendIndex: new Map(),
   instances: [],
   loading: false,
+  loadFailed: false,
+  groupLoadFailed: false,
   loadGeneration: 0,
   autoRefreshDueAt: 0,
   favoriteMutationPending: false,
@@ -175,6 +187,7 @@ function persistUiPreferences() {
     instanceDisplay: state.instanceDisplay,
     friendSort: state.friendSort,
     offlineSort: state.offlineSort,
+    showNonFriendOwners: state.showNonFriendOwners,
     theme: state.theme,
     autoRefreshMinutes: state.autoRefreshMinutes,
     sidebarWidths: sidebarResizer.preferences(),
@@ -208,7 +221,8 @@ function restoreUiPreferences() {
   state.friendSort = ['name', 'favorite_list'].includes(prefs.friendSort)
     ? prefs.friendSort
     : 'favorite_list';
-  state.theme = ['light', 'ash', 'dark-blue', 'dark'].includes(prefs.theme)
+  if (prefs.theme === 'sage') prefs.theme = 'mist';
+  state.theme = ['light', 'sand', 'mist', 'ash', 'dark-blue', 'dark'].includes(prefs.theme)
     ? prefs.theme
     : 'dark-blue';
   state.autoRefreshMinutes = [5, 10, 30].includes(Number(prefs.autoRefreshMinutes))
@@ -221,6 +235,8 @@ function restoreUiPreferences() {
       : 'normal';
   state.offlineSort = ['name', 'recent', 'oldest'].includes(prefs.offlineSort) ? prefs.offlineSort : 'name';
   if (elements.offlineSort) elements.offlineSort.value = state.offlineSort;
+  state.showNonFriendOwners = prefs.showNonFriendOwners === true;
+  if (elements.showNonFriendOwners) elements.showNonFriendOwners.checked = state.showNonFriendOwners;
   applyInstanceSize();
   applyInstanceDisplay();
   applyTheme();
@@ -284,13 +300,13 @@ function updateThemeButtons() {
 }
 
 function applyTheme() {
-  const theme = ['light', 'ash', 'dark-blue', 'dark'].includes(state.theme)
+  const theme = ['light', 'sand', 'mist', 'ash', 'dark-blue', 'dark'].includes(state.theme)
     ? state.theme
     : 'dark-blue';
   state.theme = theme;
   document.documentElement.dataset.theme = theme;
   document.body.dataset.theme = theme;
-  document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.style.colorScheme = ['light', 'sand', 'mist'].includes(theme) ? 'light' : 'dark';
   updateThemeButtons();
 }
 
@@ -423,7 +439,7 @@ function renderOfflineSearchStatus() {
   root.hidden = !elements.showOffline?.checked || !progress.failed;
   root.classList.toggle('error', progress.failed);
   root.textContent = progress.failed
-    ? t('一部のOffline情報を取得できませんでした。「更新」で再試行してください。')
+    ? readFailureMessage('offline')
     : '';
 }
 
@@ -604,6 +620,7 @@ function showActionToast(message, options = {}) { actionToast.show(message, opti
 
 function applyMainSortOptions() {
   if (!elements.sort) return;
+  elements.sort.hidden = state.viewMode === VIEW_MODES.RECENT;
   if (state.viewMode === VIEW_MODES.FRIENDS) {
     elements.sort.innerHTML = lt`
       <option value="name">名前順</option>
@@ -614,8 +631,8 @@ function applyMainSortOptions() {
     elements.sort.setAttribute('aria-label', t('フレンド表示の並び順'));
   } else {
     elements.sort.innerHTML = lt`
-      <option value="friends_desc">フレンドが多い順</option>
-      <option value="users_desc">参加人数が多い順</option>`;
+      <option value="friends_desc" title="フレンドが多い順">フレンド順</option>
+      <option value="users_desc" title="参加人数が多い順">参加人数順</option>`;
     elements.sort.value = Object.values(SORTS).includes(state.sort)
       ? state.sort
       : SORTS.FRIENDS_DESC;
@@ -624,6 +641,8 @@ function applyMainSortOptions() {
 }
 
 function updateTabButtons() {
+  elements.recentButton?.classList.toggle('active', state.viewMode === VIEW_MODES.RECENT);
+  elements.recentButton?.setAttribute('aria-pressed', String(state.viewMode === VIEW_MODES.RECENT));
   document.querySelectorAll('.tab').forEach((button) => {
     const isFriendView = button.dataset.view === VIEW_MODES.FRIENDS;
     const active = isFriendView
@@ -810,7 +829,7 @@ function renderFriendSidebarLocationThumbnail(friend) {
     ? `<img class="friend-sidebar-location-thumb-image" data-image-src="${escapeHtml(thumb)}" loading="lazy" decoding="async" alt="">`
     : `<div class="friend-sidebar-location-thumb-placeholder friend-location-thumb-placeholder">${renderFriendLocationPlaceholderIcon({ isPrivate, isWebsite })}</div>`;
   const statusText = isWebsite
-    ? 'Other Platform'
+    ? 'OtherPlatform'
     : isPrivate
       ? 'Private'
       : permissionLabel(permission);
@@ -968,6 +987,130 @@ function setActiveTab(tab, { resetScroll = true } = {}) {
   render({ resetScroll });
 }
 
+async function loadRecentWorlds({ force = false } = {}) {
+  if (!state.user || state.loading || state.favoriteMutationPending) return;
+  const recent = state.recent;
+  if (recent.loading || (recent.ready && !force)) return;
+  const account = state.user.id, generation = state.loadGeneration, token = ++recent.token;
+  const api = repository.api;
+  const current = () => recent === state.recent && token === recent.token && generation === state.loadGeneration && state.user?.id === account;
+  recent.account = account; recent.loading = true; recent.error = null;
+  if (state.viewMode === VIEW_MODES.RECENT) render();
+  try {
+    const rows = await fetchRecentWorlds(api);
+    if (!current()) return;
+    recent.rows = rows; recent.ready = true;
+  } catch (error) {
+    if (!current() || error?.name === 'AbortError') return;
+    if (error?.status === 401) { handleSessionExpired(); return; }
+    console.warn('Could not load recent worlds:', error);
+    recent.error = error;
+  } finally {
+    if (current()) { recent.loading = false; if (state.viewMode === VIEW_MODES.RECENT) render(); }
+  }
+}
+
+function setRecentView() {
+  state.viewMode = VIEW_MODES.RECENT;
+  clearInstanceHighlight(); applyMainSortOptions(); persistUiPreferences();
+  render({ resetScroll: true }); void loadWorldView();
+}
+
+async function loadWorldView({force=false}={}) {
+  if(!state.user || state.loading || state.favoriteMutationPending || worldView.loading)return;
+  const view=worldView, store=worldFavorites, catalog=worldCatalog, api=repository.api;
+  const generation=state.loadGeneration, account=state.user.id, token=++view.token;
+  const current=()=>view===worldView && token===view.token && generation===state.loadGeneration && state.user?.id===account && store===worldFavorites;
+  view.loading=true; view.error=null; render();
+  try {
+    if(store){
+      try{await store.load(force)}catch(error){
+        if(view.selected!=='recent' || error?.status===401 || error?.name==='AbortError')throw error;
+        // Recent remains usable if the independent Favorite metadata read fails.
+      }
+    }
+    if(!current())return;
+    if(view.selected==='recent'){
+      view.loading=false;
+      await loadRecentWorlds({force});
+      return;
+    }
+    if(!store?.groups.some(g=>g.key===view.selected)){view.selected='recent';view.loading=false;await loadRecentWorlds({force});return}
+    let paintQueued=false;
+    const onProgress=()=>{
+      if(!current() || state.viewMode!==VIEW_MODES.RECENT || paintQueued)return;
+      paintQueued=true;
+      requestAnimationFrame(()=>{paintQueued=false;if(current() && state.viewMode===VIEW_MODES.RECENT)paintWorldProgress()});
+    };
+    await catalog.load(store.members(view.selected),api,{force,group:store.groups.find(g=>g.key===view.selected),
+      current:()=>catalog===worldCatalog && generation===state.loadGeneration && state.user?.id===account,
+      shouldContinue:()=>current() && state.viewMode===VIEW_MODES.RECENT,onProgress});
+  }catch(error){
+    if(!current() || error?.name==='AbortError')return;
+    if(error?.status===401){handleSessionExpired();return}
+    view.error=error;
+  }finally{if(current()){view.loading=false;if(state.viewMode===VIEW_MODES.RECENT)paintWorldProgress();else render({resetScroll:false})}}
+}
+function paintWorldProgress(){
+  updateReloadButton();
+  const section=elements.list.querySelector('.recent-worlds');if(!section)return;
+  const template=document.createElement('template');template.innerHTML=renderRecentWorlds();
+  patchElement(section,template.content.firstElementChild);
+}
+function renderRecentWorlds() {
+  const recent=state.recent, groups=worldFavorites?.groups||[], selected=worldView.selected;
+  const group=groups.find(g=>g.key===selected), isRecent=selected==='recent';
+  const rows=isRecent?recent.rows:(worldFavorites?.members(selected)||[]).map(id=>worldCatalog.worlds.get(id)||{id,pending:worldView.loading,unavailable:!worldView.loading});
+  const notice=worldView.loading?t('ワールドを読み込み中…'):worldView.error?readFailureMessage('worlds',worldView.error)
+    :isRecent?(recent.loading?t('訪問ワールドを読み込み中…'):recent.error?readFailureMessage('recent',recent.error):recent.ready&&!rows.length?t('最近訪問したワールドはありません。'):'')
+    :!rows.length?t('このリストにはワールドがありません。'):'';
+  const editor=worldView.editor;
+  const edit=editor&&editor.key===selected?`<form class="world-list-editor" data-world-list-editor aria-busy="${editor.saving}"><label>${escapeHtml(t('リスト名'))} <input class="world-list-name" maxlength="20" value="${escapeHtml(editor.draft)}"${editor.saving?' disabled':''}></label><span class="world-name-count">${editor.draft.length} / 20</span><button type="submit"${editor.saving||editor.unknown?' disabled':''}>${escapeHtml(t('保存'))}</button><button type="button" data-world-edit-cancel${editor.saving?' disabled':''}>${escapeHtml(t('キャンセル'))}</button><div role="status">${escapeHtml(editor.saving?t('リスト名を保存しています(少し時間が掛かります)…'):editor.error?t(editor.error):'')}</div></form>`:'';
+  return `<section class="recent-worlds" aria-label="${escapeHtml(t('ワールド管理'))}"><div class="world-tabs" role="tablist" aria-label="${escapeHtml(t('ワールドリスト'))}">
+    <button type="button" role="tab" aria-selected="${isRecent}" data-world-tab="recent">${escapeHtml(t('足跡'))}</button>${groups.map((g,i)=>`<button type="button" role="tab" aria-selected="${g.key===selected}" data-world-tab="${escapeHtml(g.key)}" title="${escapeHtml(g.label)}">★${i+1} ${escapeHtml(g.label)} <span class="world-list-count">(${worldFavorites.members(g.key).length})</span></button>`).join('')}</div>
+    ${group?`<div class="world-list-heading"><h2>${escapeHtml(group.label)}</h2><button type="button" data-world-edit title="${escapeHtml(t('リスト名を変更'))}" aria-label="${escapeHtml(t('リスト名を変更'))}"${state.favoriteMutationPending?' disabled':''}><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m4 13 9-9 3 3-9 9-4 1zM11 6l3 3"/></svg></button></div>`:`<h2>${escapeHtml(t('足跡'))}</h2>`}${edit}
+    <div class="recent-notice" role="status">${escapeHtml(notice)}</div><div class="recent-world-grid">${rows.map(world=>{
+      const unavailable=worldIsUnavailable(world);
+      const thumb=unavailable?'':displayImageUrl(world.thumbnailImageUrl||world.imageUrl||'','world'), platforms=unavailable?null:worldPlatforms(world), name=unavailable?t('情報取得不可'):world.name||t('ワールド情報を取得中…');
+      const placeholder=unavailable?`<div class="thumb thumb-placeholder world-unavailable"><span class="world-unavailable-icon" aria-hidden="true">⌕</span><span>World Currently<br>Unavailable</span></div>`:'<div class="thumb thumb-placeholder"></div>';
+      return `<article class="recent-world-card" data-world-id="${escapeHtml(world.id)}"><div class="thumb-wrap has-world-favorite"><a class="world-page-link" href="${escapeHtml(buildWorldUrl({worldId:world.id}))}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(t('ワールドページを開く'))}">${thumb?`<img class="thumb" data-image-src="${escapeHtml(thumb)}" alt="" loading="eager" decoding="async">`:placeholder}</a>${renderWorldFavoriteButton(world.id)}</div>
+      <div class="recent-world-name">${escapeHtml(name)}</div><div class="recent-world-author">${escapeHtml(unavailable||world.pending?world.id:world.authorName||t('作者不明'))}</div><div class="world-card-actions"><span class="world-platforms" title="${escapeHtml(t('対応環境'))}">${escapeHtml(platforms?.length?platforms.join(' / '):t('対応環境不明'))}</span><button type="button" class="world-copy" data-copy-url="${escapeHtml(buildWorldUrl({worldId:world.id}))}" title="${escapeHtml(t('ワールドURLをコピー'))}" aria-label="${escapeHtml(t('ワールドURLをコピー'))}"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="6" width="11" height="11" rx="1.5"/><path d="M13 6V3H3v10h3"/></svg></button></div></article>`;
+    }).join('')}</div></section>`;
+}
+async function saveWorldListName(event) {
+  if(!event.target.matches('[data-world-list-editor]'))return;
+  event.preventDefault();const editor=worldView.editor,store=worldFavorites,view=worldView;
+  if(!editor || editor.saving || editor.unknown || state.loading || state.favoriteMutationPending)return;
+  const name=editor.draft.trim();
+  if(!name || name.length>20 || /[\r\n\u0000]/.test(name)){editor.error='グループ名は20文字以内で入力してください。';render();return}
+  editor.saving=true;editor.error='';state.favoriteMutationPending=true;
+  event.target.querySelectorAll('button,input').forEach(control=>{control.disabled=true});
+  actionToast.setUndoBusy(true);render({resetScroll:false});
+  showActionToast(t('リスト名を保存しています(少し時間が掛かります)…'),{delay:0});
+  try {
+    await store.rename(editor.key,name,editor.label);
+    if(view!==worldView || store!==worldFavorites)return;
+    view.editor=null;showActionToast(t('リスト名を変更しました。'));
+  }catch(error){
+    if(view!==worldView || store!==worldFavorites)return;
+    if(error?.status===401){handleSessionExpired();return}
+    editor.unknown=Boolean(error?.outcomeUnknown);
+    editor.error=editor.unknown?'変更結果を確認できませんでした。「更新」で名前を確認してください。':error?.favoriteConflict?'Favoriteが別の画面で変更されたため、操作を中止しました。':'リスト名を変更できませんでした。';
+    showActionToast(t(editor.error),{error:true,delay:5600});
+  }finally{if(view===worldView){editor.saving=false;state.favoriteMutationPending=false;actionToast.setUndoBusy(false);render({resetScroll:false})}}
+}
+function onWorldViewClick(event) {
+  const tab=event.target.closest('[data-world-tab]');
+  if(tab && !state.favoriteMutationPending && !state.loading){worldView.selected=tab.dataset.worldTab;worldView.editor=null;worldView.token++;worldView.loading=false;render({resetScroll:true});void loadWorldView();elements.list.querySelector(`[data-world-tab="${CSS.escape(worldView.selected)}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});return}
+  if(event.target.closest('[data-world-edit]') && !state.favoriteMutationPending){
+    const group=worldFavorites?.groups.find(g=>g.key===worldView.selected);if(!group)return;
+    worldView.editor=worldView.editor?null:{key:group.key,label:group.label,draft:group.label,saving:false,error:'',unknown:false};render();elements.list.querySelector('.world-list-name')?.focus();return;
+  }
+  if(event.target.closest('[data-world-edit-cancel]') && !worldView.editor?.saving){worldView.editor=null;render();return}
+  const copy=event.target.closest('[data-copy-url]');
+  if(copy){void navigator.clipboard.writeText(copy.dataset.copyUrl).then(()=>showActionToast(t('URLをコピーしました。'))).catch(()=>showActionToast(t('URLをコピーできませんでした。'),{error:true}));}
+}
+
 function setFriendView({ resetScroll = true } = {}) {
   state.viewMode = VIEW_MODES.FRIENDS;
   clearInstanceHighlight();
@@ -986,12 +1129,13 @@ function reverseEntryForFriend(friend) {
 function friendLocationLabel(friend, entry = reverseEntryForFriend(friend)) {
   const status = onlineStatusInfo(friend);
   if (!friendIsOnline(friend)) return 'Offline';
-  if (status.className === 'online-website') return 'Other Platform';
+  if (status.className === 'online-website') return 'OtherPlatform';
   const location = resolveFriendLocation(friend);
   const permission = entry?.permission || classifyPermission(location);
   if (permission === PERMISSIONS.PRIVATE || location === 'private') return 'Private';
   const worldName = entry?.world?.name || entry?.instanceData?.world?.name || '';
   if (worldName) return worldName;
+  if (entry?.instanceFetchFailed || entry?.worldFetchFailed) return t('情報取得不可');
   if (entry?.worldId && entry.worldId !== 'offline' && entry.worldId !== 'private') return t('ワールド情報を取得中…');
   return permissionLabel(permission);
 }
@@ -1002,10 +1146,10 @@ function friendLocationSortKey(friend) {
   const location = resolveFriendLocation(friend);
   const permission = entry?.permission || classifyPermission(location);
 
-  // Instances, Private, Other Platform, then Offline.
+  // Instances, Private, OtherPlatform, then Offline.
   if (!friendIsOnline(friend)) return '3\u0000Offline';
   if (status.className === 'online-website') {
-    return '2\u0000Other Platform';
+    return '2\u0000OtherPlatform';
   }
   if (permission === PERMISSIONS.PRIVATE || location === 'private') {
     return '1\u0000Private';
@@ -1112,7 +1256,7 @@ function renderFriendLocationItem(friend) {
     ? `<img class="friend-location-thumb" data-image-src="${escapeHtml(thumb)}" loading="lazy" decoding="async" alt="">`
     : `<div class="friend-location-thumb friend-location-thumb-placeholder">${renderFriendLocationPlaceholderIcon({ isPrivate, isWebsite })}</div>`;
   const simpleStatusText = isWebsite
-    ? 'Other Platform'
+    ? 'OtherPlatform'
     : isPrivate
       ? 'Private'
       : permissionLabel(permission);
@@ -1128,7 +1272,7 @@ function renderFriendLocationItem(friend) {
     : `<div class="friend-location-thumb-link">${thumbContent}${thumbOverlay}</div>`;
 
   const locationMeta = isWebsite
-    ? `<span class="friend-state friend-location-permission ${permissionClass}">Other Platform</span>`
+    ? `<span class="friend-state friend-location-permission ${permissionClass}">OtherPlatform</span>`
     : isPrivate
       ? `<span class="friend-state friend-location-permission ${permissionClass}">Private</span>`
       : `<span class="friend-state friend-location-permission ${permissionClass}">${escapeHtml(permissionLabel(permission))}</span>${region ? `<span class="friend-location-region">${escapeHtml(region)}</span>` : ''}${countText ? lt`<span class="friend-location-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(countText)}</span>` : ''}`;
@@ -1176,6 +1320,7 @@ function renderFavoriteGroupEditor(group) {
       <button class="favorite-group-save" type="submit"${editor.saving || editor.outcomeUnknown ? ' disabled' : ''}>保存</button>
       <button class="favorite-group-cancel" type="button" data-group-edit-cancel${disabled}>キャンセル</button>
     </div>
+    <p class="favorite-group-save-status" role="status"${editor.saving ? '' : ' hidden'}>${editor.saving ? escapeHtml(t('リスト名を保存しています(少し時間が掛かります)…')) : ''}</p>
     <p class="favorite-group-editor-help" id="favorite-group-name-help">最大20文字。一部の絵文字は2文字分として数えます。</p>
     <p class="favorite-group-editor-error" role="alert"${editor.error ? '' : ' hidden'}>${escapeHtml(editor.error || '')}</p>
   </form>`;
@@ -1267,6 +1412,10 @@ function renderSummaryPeopleIcon(kind) {
   </svg>`;
 }
 
+function ownerDisplayState() {
+  return state.viewMode === VIEW_MODES.INSTANCES ? state : {...state, tab:TABS.ALL};
+}
+
 function renderParticipantList(entry, { showAll = false } = {}) {
   const participantState = showAll ? { ...state, tab: TABS.ALL } : state;
   const participants = sortParticipants(
@@ -1274,15 +1423,8 @@ function renderParticipantList(entry, { showAll = false } = {}) {
     participantsForEntry(entry, participantState, friendMap()),
     state,
   );
-  if (!participants.length) {
-    const empty = !showAll && state.tab === TABS.FAVORITE_ONLY
-      ? t('表示対象のFavoriteフレンドはいません')
-      : t('表示対象のユーザーはいません');
-    return `<div class="participant-empty">${escapeHtml(empty)}</div>`;
-  }
-
-  const ownerId = instanceOwnerId(entry);
-  return `<div class="participant-list">${participants.map((user) => {
+  const extraOwner = nonFriendOwnerForEntry(entry, ownerDisplayState(), friendMap());
+  const renderUser = (user, ownerInfo=false) => {
     const name = user.displayName || user.username || user.id;
     const src = displayImageUrl(
       user.profilePicOverride
@@ -1299,13 +1441,10 @@ function renderParticipantList(entry, { showAll = false } = {}) {
     const avatarLink = profileUrl
       ? lt`<a class="participant-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${avatar}</a>`
       : avatar;
-    const isOwner = Boolean(ownerId && ownerId === user.id);
+    const isOwner = Boolean(instanceOwnerId(entry) === user.id);
     const isFriend = friendMap().has(user.id);
     const ownerBadge = isOwner
-      ? '<span class="owner-badge" title="Instance Owner">Owner</span>'
-      : '';
-    const foafBadge = isOwner && !isFriend && isFoafPresentInEntry(entry, user)
-      ? '<span class="foaf-badge" title="Friend of a Friend">FOAF</span>'
+      ? `<span class="owner-badge${ownerInfo?' owner-badge-reference':''}" title="${escapeHtml(ownerInfo?t('現在の参加者とは限りません。インスタンスオーナーとして表示しています。'):'Instance Owner')}">Owner</span>`
       : '';
     const favoriteBadge = isFriend
       ? renderFavoriteActionButton(user.id, 'favorite-badge-participant')
@@ -1314,11 +1453,17 @@ function renderParticipantList(entry, { showAll = false } = {}) {
     return `
       <div class="participant" title="${escapeHtml(name)}">
         <div class="participant-avatar-wrap">
-          ${avatarLink}${ownerBadge}${foafBadge}${favoriteBadge}
+          ${avatarLink}${ownerBadge}${favoriteBadge}
         </div>
         <div class="participant-name">${escapeHtml(name)}</div>
       </div>`;
-  }).join('')}</div>`;
+  };
+  const empty = !showAll && state.tab === TABS.FAVORITE_ONLY
+    ? t('表示対象のFavoriteフレンドはいません') : t('表示対象のユーザーはいません');
+  const people = participants.length ? `<div class="participant-list">${participants.map(user=>renderUser(user)).join('')}</div>`
+    : `<div class="participant-empty">${escapeHtml(empty)}</div>`;
+  const ownerFrame = extraOwner ? `<section class="non-friend-owner-info" aria-label="${escapeHtml(t('インスタンスオーナー'))}">${renderUser(extraOwner,true)}</section>` : '';
+  return ownerFrame ? `<div class="participant-area">${ownerFrame}${people}</div>` : people;
 }
 
 function renderPrivateInstance(entry, { showAll = false } = {}) {
@@ -1398,7 +1543,8 @@ function renderInstanceCard(entry, { preview = false } = {}) {
 
   return lt`
     <article class="card${hydrated ? '' : ' card-loading'}${instanceIsHighlighted(entry) ? ' instance-highlight' : ''}" data-location="${escapeHtml(entry.location)}">
-      ${worldUrl ? lt`<a class="thumb-wrap thumb-clickable" href="${escapeHtml(worldUrl)}" target="_blank" rel="noopener noreferrer" title="ワールドページを開く">` : '<div class="thumb-wrap">'}
+      <div class="thumb-wrap${worldUrl ? ' thumb-clickable' : ''}">
+      ${worldUrl ? lt`<a class="world-page-link" href="${escapeHtml(worldUrl)}" target="_blank" rel="noopener noreferrer" title="ワールドページを開く">` : '<div class="world-page-link">'}
         ${thumb
           ? `<img class="thumb" data-image-src="${escapeHtml(thumb)}" loading="eager" decoding="async" alt="">`
           : '<div class="thumb thumb-placeholder"></div>'}
@@ -1412,7 +1558,8 @@ function renderInstanceCard(entry, { preview = false } = {}) {
         </div>
         <div class="overlay-title" title="${escapeHtml(worldName)}">${escapeHtml(worldName)}</div>
       ${worldUrl ? '</a>' : '</div>'}
-      <button class="invite-me-button invite-me-button-simple" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInvite Meを送信" ${entry.debug || state.pendingInvites.has(entry.location) || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>Invite Me</button>
+      </div>
+      <button class="invite-me-button invite-me-button-simple" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInviteMeを送信" ${entry.debug || state.pendingInvites.has(entry.location) || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>InviteMe</button>
 
       <div class="info-panel">
         <div class="instance-title-line">
@@ -1428,7 +1575,7 @@ function renderInstanceCard(entry, { preview = false } = {}) {
             <path d="M2.8 10h14.4M10 2.5c2.1 2 3.2 4.5 3.2 7.5S12.1 15.5 10 17.5M10 2.5C7.9 4.5 6.8 7 6.8 10s1.1 5.5 3.2 7.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg><span class="summary-value">${escapeHtml(permissionLabel(entry.permission))}${entry.region ? ` / ${escapeHtml(regionLabel(entry.region))}` : ''}</span></div>
           <div class="summary-item">${renderSummaryPeopleIcon('world')}<span class="summary-value">${escapeHtml(userCountText)}</span></div>
-          <div class="summary-item friend-count-summary">${renderSummaryPeopleIcon('friends')}<span class="summary-value">${escapeHtml(String(friendCount))}</span><button class="invite-me-button invite-me-button-normal" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInvite Meを送信" ${entry.debug || state.pendingInvites.has(entry.location) || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>Invite Me</button></div>
+          <div class="summary-item friend-count-summary">${renderSummaryPeopleIcon('friends')}<span class="summary-value">${escapeHtml(String(friendCount))}</span><button class="invite-me-button invite-me-button-normal" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInviteMeを送信" ${entry.debug || state.pendingInvites.has(entry.location) || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>InviteMe</button></div>
         </div>
 
         ${renderParticipantList(entry, { showAll: preview })}
@@ -1448,7 +1595,7 @@ async function onInviteMeClick(event) {
   const entry = getCurrentInstanceEntry(location);
   if (!entry || !entry.worldId || !entry.instanceId) return;
   if (CONFIG.DEBUG_MODE || entry.debug) {
-    showActionToast(t('DEBUG MODE: ダミーインスタンスにはInvite Meを送信しません。'), { delay: 2600 });
+    showActionToast(t('DEBUG MODE: ダミーインスタンスにはInviteMeを送信しません。'), { delay: 2600 });
     return;
   }
   if (button.disabled || state.loading || state.pendingInvites.has(location)) return;
@@ -1463,26 +1610,26 @@ async function onInviteMeClick(event) {
     if (generation !== state.loadGeneration) return;
     button.textContent = 'Invited';
     button.classList.add('is-success');
-    showActionToast(t('Invite Meを送信しました'), { delay: 2200 });
+    showActionToast(t('InviteMeを送信しました'), { delay: 2200 });
     window.setTimeout(() => {
       if (!button.isConnected) return;
-      button.textContent = 'Invite Me';
+      button.textContent = 'InviteMe';
       button.classList.remove('is-success', 'is-loading');
       button.disabled = false;
     }, 1800);
   } catch (error) {
     if (generation !== state.loadGeneration || error?.name === 'AbortError') return;
     if (error?.status === 401) handleSessionExpired();
-    console.warn('Could not send Invite Me:', location, error);
-    button.textContent = 'Invite Me';
+    console.warn('Could not send InviteMe:', location, error);
+    button.textContent = 'InviteMe';
     button.classList.remove('is-loading');
     button.disabled = false;
     const message = error?.status === 401
       ? t('VRChatのログインセッションが無効です。')
       : error?.status === 404
-        ? t('このインスタンスは存在しないか、Invite Meを送信できません。')
+        ? t('このインスタンスは存在しないか、InviteMeを送信できません。')
         : error?.outcomeUnknown ? t('送信結果を確認できませんでした。VRChat側の通知を確認してください。')
-      : lt`Invite Meの送信に失敗しました${error?.status ? ` (${error.status})` : ''}`;
+      : lt`InviteMeの送信に失敗しました${error?.status ? ` (${error.status})` : ''}`;
     showActionToast(message, { error: true, delay: 5600 });
   } finally {
     state.pendingInvites.delete(location);
@@ -1490,7 +1637,7 @@ async function onInviteMeClick(event) {
       if (other.dataset.location !== location) return;
       other.disabled = false;
       other.classList.remove('is-loading');
-      if (other !== button) other.textContent = 'Invite Me';
+      if (other !== button) other.textContent = 'InviteMe';
     });
   }
 }
@@ -1515,9 +1662,7 @@ function needsHydration(entry) {
     && entry.worldId && entry.worldId !== 'offline' && entry.worldId !== 'private') {
     return true;
   }
-  return needsNonFriendOwnerProfile(entry, friendMap())
-    || needsInstanceDetailsForFoaf(entry, state, friendMap())
-    || shouldFetchNonFriendOwner(entry, state, friendMap());
+  return needsNonFriendOwnerProfile(entry, friendMap(), ownerDisplayState());
 }
 
 function scrollInstanceCardIntoView(location, behavior = 'smooth') {
@@ -1596,19 +1741,15 @@ async function hydrateInstance(location, fallbackEntry) {
         if (error?.status === 401) { handleSessionExpired(); return; }
         currentEntry = getCurrentInstanceEntry(location, currentEntry);
         currentEntry.instanceFetchFailed = true;
-        currentEntry.foafChecked = true;
         replaceCardInDom(currentEntry);
         throw error;
       }
     }
 
-    // A successful Instance response completes the one-time FOAF presence
-    // check. If the response omits `users`, FOAF is simply not displayable;
-    // never requeue the same request forever.
+    // Owner information does not require a presence check.
     currentEntry = getCurrentInstanceEntry(location, currentEntry);
     const changed = !currentEntry.instanceData || currentEntry.instanceData !== data;
     currentEntry.instanceFetchFailed = false;
-    currentEntry.foafChecked = true;
     mergeInstanceData(currentEntry, data);
 
     if (!currentEntry.world && !currentEntry.worldFetchFailed
@@ -1631,8 +1772,7 @@ async function hydrateInstance(location, fallbackEntry) {
       }
     }
 
-    if (needsNonFriendOwnerProfile(currentEntry, friendMap())
-      || shouldFetchNonFriendOwner(currentEntry, state, friendMap())) {
+    if (needsNonFriendOwnerProfile(currentEntry, friendMap(), ownerDisplayState())) {
       const ownerId = instanceOwnerId(currentEntry);
       const ownerUser = await dataRepository.fetchUser(ownerId);
       if (!current()) return;
@@ -1692,7 +1832,7 @@ function previewParticipantCount(entry) {
     entry,
     participantsForEntry(entry, participantState, friendMap()),
     state,
-  ).length;
+  ).length + (nonFriendOwnerForEntry(entry, ownerDisplayState(), friendMap()) ? 1 : 0);
 }
 
 function positionFriendInstancePreview() {
@@ -1726,7 +1866,11 @@ function renderFriendInstancePreview(entry) {
     ? 5
     : Math.min(5, participantCount);
   const avatarSize = { small: 60, medium: 72, large: 88 }[state.instanceSize] || 72;
-  const gridWidth = (columns * avatarSize) + ((columns - 1) * 4);
+  // The owner reference occupies one counted slot, plus its dashed frame
+  // padding and the outer gap in place of the ordinary 4px grid gap.
+  const ownerExtra = nonFriendOwnerForEntry(entry, ownerDisplayState(), friendMap())
+    ? (window.innerWidth <= 620 ? 2 : 16) + (state.instanceDisplay === 'normal' ? 10 : 6) - 4 : 0;
+  const gridWidth = (columns * avatarSize) + ((columns - 1) * 4) + ownerExtra;
   preview.style.setProperty('--friend-preview-columns', String(columns));
   preview.style.setProperty('--friend-preview-grid-width', `${gridWidth}px`);
   patchMarkup(preview, renderInstanceCard(entry, { preview: true }));
@@ -1954,7 +2098,7 @@ async function saveFavoriteGroupName(event) {
   state.favoriteMutationPending = true;
   actionToast.setUndoBusy(true);
   render({ resetScroll: false });
-  showActionToast(t('グループ名を保存しています…'), { delay: 0 });
+  showActionToast(t('リスト名を保存しています(少し時間が掛かります)…'), { delay: 0 });
   try {
     const result = await dataRepository.renameFriendFavoriteGroup(editor.groupName, name);
     if (generation !== state.loadGeneration || dataRepository.disposed) return;
@@ -1994,6 +2138,7 @@ function closeFavoriteMenu({ restoreFocus = false } = {}) {
     elements.favoriteMenu.style.top = '';
   }
   state.favoriteMenu.userId = '';
+  state.favoriteMenu.worldId = '';
   state.favoriteMenu.anchor = null;
   state.favoriteMenu.busy = false;
   state.favoriteMenu.fromFriendPreview = false;
@@ -2007,10 +2152,10 @@ function positionFavoriteMenu(anchor) {
   const gap = 5;
   const rect = anchor.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
-  let left = rect.right - menuRect.width;
+  let left = rect.right + gap;
   let top = rect.bottom + gap;
-  if (left < edge) left = rect.left;
-  if (left + menuRect.width > window.innerWidth - edge) left = window.innerWidth - menuRect.width - edge;
+  if (left + menuRect.width > window.innerWidth - edge) left = rect.left - menuRect.width - gap;
+  left = Math.min(left, window.innerWidth - menuRect.width - edge);
   if (top + menuRect.height > window.innerHeight - edge) top = rect.top - menuRect.height - gap;
   menu.style.left = `${Math.max(edge, Math.round(left))}px`;
   menu.style.top = `${Math.max(edge, Math.round(top))}px`;
@@ -2158,7 +2303,136 @@ async function undoFavorite(ticket) {
   }
 }
 
+
+function initializeDemoWorldFavorites(instances) {
+  worldFavorites = new WorldFavorites(repository.api);
+  worldFavorites.ready = true; worldFavorites.updatedAt = Date.now();
+  worldFavorites.groups = [1,2,3,4].map(n=>({type:'world',name:`worlds${n}`,key:`world:worlds${n}`,label:['Chill Worlds','Event Worlds','Explore','Favorite Worlds'][n-1]}));
+  const ids=[...new Set(instances.map(e=>e.worldId).filter(Boolean))].slice(0,2);
+  ids.forEach((id,i)=>worldFavorites.records.set(id,[{id:`fvrt_demo_world_${i}`,type:'world',tags:[`worlds${i+1}`]}]));
+}
+function renderWorldFavoriteButton(worldId) {
+  if (!/^wrld_[A-Za-z0-9_-]+$/.test(worldId || '')) return '';
+  const active = Boolean(worldFavorites?.records.get(worldId)?.length);
+  const label = worldFavorites?.ready
+    ? t(active ? 'ワールドFavoriteを変更' : 'ワールドをFavoriteに登録')
+    : t('ワールドFavoriteを確認');
+  return `<button type="button" class="world-favorite-button favorite-badge${active ? ' is-favorite' : ''}" data-world-favorite-id="${escapeHtml(worldId)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${state.favoriteMutationPending || state.loading ? ' disabled' : ''}><span aria-hidden="true">${active ? `★${worldFavorites.number(worldId)||1}` : ''}</span></button>`;
+}
+async function refreshWorldFavorites(generation, store, force=false) {
+  if (!store || CONFIG.DEBUG_MODE || CONFIG.SCREENSHOT_MODE) return;
+  try {
+    await store.load(force);
+    if (generation !== state.loadGeneration || store !== worldFavorites) return;
+    render({ resetScroll:false });
+  } catch (error) {
+    if (generation !== state.loadGeneration || error?.name === 'AbortError') return;
+    if (error?.status === 401) { handleSessionExpired(); return; }
+    console.warn('Could not read world Favorites:', error);
+  }
+}
+function unavailableFavoriteWorld(worldId) {
+  const world=worldCatalog.worlds.get(worldId) || state.recent.rows.find(w=>w.id===worldId);
+  return Boolean(world && worldIsUnavailable(world));
+}
+function renderWorldFavoriteMenu(worldId, anchor) {
+  const menu=elements.favoriteMenu;
+  if (!menu || !anchor?.isConnected) return;
+  const current=worldFavorites?.current(worldId)||[];
+  const groups=worldFavorites?.groups||[];
+  const unavailable=unavailableFavoriteWorld(worldId);
+  menu.innerHTML=(worldFavorites?.ready
+    ? (unavailable ? `<div class="favorite-menu-world-heading" role="note">${escapeHtml(t('取得不可のワールドは移動・再登録できません。Favoriteの解除は元に戻せない可能性があります。'))}</div>` : groups.map(g=>{
+      const active=current.some(r=>r.type===g.type && r.tags.includes(g.name));
+      const label=`★${groups.indexOf(g)+1} ${g.label}${g.type==='vrcPlusWorld'?' (VRC+)':''}`;
+      return `<button type="button" class="favorite-menu-item${active?' is-current':''}" role="menuitemradio" aria-checked="${active}" data-world-favorite-id="${escapeHtml(worldId)}" data-world-favorite-group="${escapeHtml(g.key)}"><span class="favorite-menu-check" aria-hidden="true">${active?'✓':''}</span><span class="favorite-menu-label">${escapeHtml(label)}</span></button>`;
+    }).join('')) + (current.length ? `<div class="favorite-menu-separator" role="separator"></div><button type="button" class="favorite-menu-item favorite-menu-remove" data-world-favorite-id="${escapeHtml(worldId)}" data-world-favorite-remove role="menuitem"><span class="favorite-menu-check" aria-hidden="true"></span><span class="favorite-menu-label">${escapeHtml(t('Favoriteを外す'))}</span></button>`:'')
+    : `<button type="button" class="favorite-menu-item" data-world-favorite-retry="${escapeHtml(worldId)}">${escapeHtml(t('ワールドFavoriteを再取得'))}</button>`);
+  state.favoriteMenu.worldId=worldId;state.favoriteMenu.anchor=anchor;
+  state.favoriteMenu.fromFriendPreview=Boolean(elements.friendInstancePreview?.contains(anchor));
+  if(state.favoriteMenu.fromFriendPreview)clearFriendPreviewTimer('close');
+  menu.classList.remove('hidden');requestAnimationFrame(()=>positionFavoriteMenu(anchor));
+}
+async function openWorldFavoriteMenu(worldId, anchor) {
+  if(state.loading || state.favoriteMutationPending)return;
+  const store=worldFavorites;const generation=state.loadGeneration;
+  if(CONFIG.DEBUG_MODE || CONFIG.SCREENSHOT_MODE){closeFavoriteMenu();renderWorldFavoriteMenu(worldId,anchor);return}
+  if(!store)return;
+  closeFavoriteMenu();renderWorldFavoriteMenu(worldId,anchor);
+  try{
+    if(!store.ready){elements.favoriteMenu.innerHTML=`<div class="favorite-menu-world-heading">${escapeHtml(t('ワールドFavoriteを確認中…'))}</div>`;await store.load(true)}
+    if(generation!==state.loadGeneration||store!==worldFavorites||state.favoriteMenu.worldId!==worldId)return;
+    renderWorldFavoriteMenu(worldId,anchor);
+  }catch(error){
+    if(generation!==state.loadGeneration||error?.name==='AbortError')return;
+    if(error?.status===401){handleSessionExpired();return}
+    if(state.favoriteMenu.worldId===worldId)renderWorldFavoriteMenu(worldId,anchor);
+    showActionToast(readFailureMessage('worldFavorites',error),{error:true,delay:5200});
+  }
+}
+async function changeWorldFavorite(worldId, desired, expected, undo=false) {
+  if(CONFIG.DEBUG_MODE || CONFIG.SCREENSHOT_MODE){showActionToast(t('撮影用モード: ワールドFavoriteは変更しません。'),{delay:2600});closeFavoriteMenu();return}
+  if(state.loading || state.favoriteMutationPending || !worldFavorites)return;
+  const store=worldFavorites,generation=state.loadGeneration,account=state.user?.id;
+  actionToast.clearUndo();state.favoriteUndo=null;state.favoriteMutationPending=true;state.favoriteMenu.busy=true;
+  elements.favoriteMenu?.querySelectorAll('button').forEach(b=>{b.disabled=true});
+  showActionToast(t('Favoriteを更新中…'),{delay:0});
+  try{
+    const unavailable=unavailableFavoriteWorld(worldId);
+    if(unavailable && desired.length){const e=new Error('Unavailable world');e.favoriteWorldUnavailable=true;e.favoriteNoMutation=true;throw e}
+    const result=await store.change(worldId,desired,expected);
+    if(generation!==state.loadGeneration||store!==worldFavorites)return;
+    if(result.syncError?.status===401){handleSessionExpired();return}
+    closeFavoriteMenu();render({resetScroll:false});
+    if(undo)showActionToast(t('Favoriteを元に戻しました。'),{delay:2800});
+    else if(unavailable && !desired.length)showActionToast(t('取得不可のワールドのFavoriteを解除しました。元に戻すことはできません。'),{delay:6000});
+    else{
+      const ticket={worldId,previous:result.previous,expected:result.expected,generation,account};state.favoriteUndo=ticket;
+      actionToast.setUndo(t('ワールドFavoriteを更新しました。'),()=>{
+        if(state.favoriteUndo!==ticket||state.user?.id!==ticket.account)return;
+        void changeWorldFavorite(worldId,ticket.previous,ticket.expected,true);
+      },()=>{if(state.favoriteUndo===ticket)state.favoriteUndo=null});
+    }
+    if(result.syncFailed)showActionToast(t('Favoriteを更新しました（再同期に失敗しました。更新で再確認してください）。'),{delay:5200});
+  }catch(error){
+    if(generation!==state.loadGeneration||error?.name==='AbortError')return;
+    if(error?.status===401){handleSessionExpired();return}
+    // Reconcile a failed or uncertain write once; no blind write retry.
+    if(!error?.favoriteNoMutation)try{await store.load(true)}catch{store.ready=false}
+    if(generation!==state.loadGeneration||store!==worldFavorites)return;
+    closeFavoriteMenu();render({resetScroll:false});
+    const message=error?.favoriteWorldUnavailable ? t('取得不可または再登録できないワールドのため、登録を変更せずに中止しました。Favoriteの解除のみ可能です。')
+      : error?.favoriteNoMutation ? t('ワールド情報を確認できませんでした。Favoriteの登録は変更していません。時間をおいて再試行してください。')
+      : error?.favoriteConflict ? t('Favoriteが別の画面で変更されたため、操作を中止しました。')
+      : error?.outcomeUnknown ? t('変更結果を確認できませんでした。更新してFavoriteの状態を確認してください。')
+      : error?.favoriteRollbackFailed ? t('ワールドFavoriteの変更に失敗し、元の登録も復元できませんでした。更新で確認してください。')
+      : error?.favoriteListSetupSuggested ? t('空リストの登録に失敗しました。改善しない場合は、公式ページから各リストへ最低ひとつ以上のワールドをお気に入り登録した後、この拡張機能の更新ボタンで再取得してください。')
+      : t('ワールドFavoriteを変更できませんでした。登録上限やアクセス権を確認してください。');
+    showActionToast(message,{error:true,delay:error?.favoriteListSetupSuggested?15000:6000});
+  }finally{if(generation===state.loadGeneration){state.favoriteMutationPending=false;state.favoriteMenu.busy=false;render({resetScroll:false});if(state.viewMode===VIEW_MODES.RECENT&&worldView.selected!=='recent')void loadWorldView()}}
+}
+function onWorldFavoriteClick(event) {
+  const button=event.target.closest('.world-favorite-button');
+  const choice=event.target.closest('[data-world-favorite-group], [data-world-favorite-remove], [data-world-favorite-retry]');
+  if(!button && !(choice&&elements.favoriteMenu?.contains(choice)))return false;
+  event.preventDefault();event.stopPropagation();
+  if(state.favoriteMutationPending||state.loading)return true;
+  if(button){
+    const id=button.dataset.worldFavoriteId;
+    if(state.favoriteMenu.worldId===id&&state.favoriteMenu.anchor===button){closeFavoriteMenu({restoreFocus:true});return true}
+    clearFriendPreviewTimer('open');clearFriendPreviewTimer('close');
+    if(!elements.friendInstancePreview?.contains(button))hideFriendInstancePreview({immediate:true});
+    void openWorldFavoriteMenu(id,button);return true;
+  }
+  if(choice.hasAttribute('data-world-favorite-retry')){void openWorldFavoriteMenu(choice.dataset.worldFavoriteRetry,state.favoriteMenu.anchor);return true}
+  const id=choice.dataset.worldFavoriteId,current=worldFavorites?.current(id)||[];
+  const group=worldFavorites?.groups.find(g=>g.key===choice.dataset.worldFavoriteGroup);
+  if(!choice.hasAttribute('data-world-favorite-remove')&&!group)return true;
+  void changeWorldFavorite(id,group?[{type:group.type,tags:[group.name]}]:[],current);return true;
+}
+
 function onFavoriteUiClick(event) {
+  if (onWorldFavoriteClick(event)) return;
   const actionButton = event.target.closest('.favorite-action-button');
   if (actionButton) {
     event.preventDefault();
@@ -2208,6 +2482,7 @@ const hydrationController = new InstanceHydrationController({
 });
 
 function render({ resetScroll = false, hydrationMode = 'normal', priorityLocation = '' } = {}) {
+  updateReloadButton();
   hideFriendInstancePreview({ immediate: true });
   closeFavoriteMenu();
   const friendScroll = elements.friendList?.scrollTop || 0;
@@ -2218,9 +2493,11 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   renderFriendSidebar();
 
   const manifest = globalThis.chrome?.runtime?.getManifest?.();
-  const appVersion = manifest?.version_name || manifest?.version || '1.5.4.23';
+  const appVersion = manifest?.version_name || manifest?.version || '1.6.1';
   const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
-  if (state.viewMode === VIEW_MODES.FRIENDS) {
+  if (state.viewMode === VIEW_MODES.RECENT) {
+    patchMarkup(elements.list, `${renderRecentWorlds()}${credit}`);
+  } else if (state.viewMode === VIEW_MODES.FRIENDS) {
     patchMarkup(elements.list, `${renderFriendLocationView()}${credit}`);
   } else {
     const data = getVisibleInstances();
@@ -2233,6 +2510,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
 
   elements.friendList.scrollTop = friendScroll;
   elements.list.scrollTop = rightScroll;
+  if (state.viewMode === VIEW_MODES.RECENT) return;
   hydrationController.sync({
     mode: hydrationMode,
     priorityLocations: priorityLocation ? [priorityLocation] : [],
@@ -2319,6 +2597,8 @@ async function refreshGroupDataInBackground(userId, dataRepository, generation) 
   try {
     const groupInstances = await dataRepository.fetchGroupInstances(userId);
     if (!current()) return;
+    state.groupLoadFailed = Boolean(dataRepository.groupInstancesError);
+    if (state.groupLoadFailed) setStatus(readFailureMessage('groups', dataRepository.groupInstancesError), true);
     const previous = new Map(state.instances.map(entry => [entry.location, entry]));
     state.instances = buildLocations(
       createFriendLocationMap(state.friends),
@@ -2332,7 +2612,7 @@ async function refreshGroupDataInBackground(userId, dataRepository, generation) 
       return { ...entry, world: old.world || entry.world,
         ownerUser: old.ownerUser, ownerUserLoaded: old.ownerUserLoaded,
         instanceFetchFailed: old.instanceFetchFailed, worldFetchFailed: old.worldFetchFailed,
-        foafChecked: old.foafChecked, groupName: old.groupName || entry.groupName };
+        groupName: old.groupName || entry.groupName };
     });
     const focusRemaining = Math.max(0, state.highlight.until - Date.now());
     if (state.highlight.location && focusRemaining > 0) {
@@ -2378,6 +2658,8 @@ async function refreshGroupDataInBackground(userId, dataRepository, generation) 
   } catch (error) {
     if (!current() || error?.name === 'AbortError') return;
     if (error?.status === 401) throw error;
+    state.groupLoadFailed = true;
+    setStatus(readFailureMessage('groups', error), true);
     console.warn('Could not refresh group instances:', error);
   }
 }
@@ -2491,6 +2773,7 @@ function loadDebugData() {
   state.favoriteRecords = new Map();
   setFavoriteGroupState(debug.favoriteGroups);
   state.instances = debug.instances;
+  initializeDemoWorldFavorites(debug.instances);
   state.lastLoadedAt = Date.now();
   state.dataFromCache = false;
   elements.login?.classList.add('hidden');
@@ -2500,6 +2783,9 @@ function loadDebugData() {
 }
 
 function clearDisplayedData() {
+  state.recent = { account: '', rows: [], ready: false, loading: false, error: false, token: state.recent.token + 1 };
+  worldFavorites = null;
+  worldCatalog=new WorldCatalog(); worldView={selected:'recent',loading:false,error:false,token:worldView.token+1,editor:null};
   state.favoriteGroupEditor = null;
   state.favoriteMutationPending = false;
   actionToast.clearUndo(); state.favoriteUndo = null;
@@ -2558,7 +2844,10 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
   const generation = ++state.loadGeneration;
   const current = () => generation === state.loadGeneration && !dataRepository.disposed;
   hydrationController.reset();
+  state.recent.token += 1; state.recent.loading = false; worldView.token++; worldView.loading=false;
   state.loading = true;
+  state.loadFailed = false;
+  state.groupLoadFailed = false;
   if (elements.reloadButton) elements.reloadButton.disabled = true;
   if (['manual', 'cache', 'restore'].includes(reason)) scheduleAutoRefresh();
   state.dataFromCache = false;
@@ -2578,7 +2867,16 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     const user = await dataRepository.fetchMe();
     if (!current()) return;
     if (state.user?.id && state.user.id !== user.id) clearDisplayedData();
+    const previousWorlds = worldFavorites;
+    state.recent.token += 1; state.recent.loading = false; worldView.token++; worldView.loading=false;
     state.user = user;
+    worldFavorites = new WorldFavorites(dataRepository.api);
+    worldFavorites.account = user.id;
+    if (previousWorlds?.account === user.id) {
+      worldFavorites.groups = previousWorlds.groups; worldFavorites.records = previousWorlds.records;
+      worldFavorites.ready = previousWorlds.ready; worldFavorites.updatedAt = previousWorlds.updatedAt;
+    }
+
 
     // Do not paint stale cached lists first. Fetch the time-sensitive primary
     // datasets first so the first interactive render reflects current data (or
@@ -2593,6 +2891,7 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     state.onlineFriends = normalizeFriends(friends);
     state.offlineProfiles.clear();
     applyFavoriteState(favoriteState);
+    void refreshWorldFavorites(generation, worldFavorites, ['manual', 'cache'].includes(reason));
     state.instances = buildLocations(
       createFriendLocationMap(state.friends),
       [],
@@ -2605,6 +2904,7 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     state.dataFromCache = Boolean(dataRepository.usedStaleFallback);
     state.loading = false;
     render();
+    if (state.viewMode === VIEW_MODES.RECENT && reason !== 'automatic') void loadWorldView();
     updateLoadedAtLabel();
     setStatus('');
     if (notify) {
@@ -2623,11 +2923,16 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
   } catch (error) {
     if (!current() || error?.name === 'AbortError') return;
     if (error?.status === 401) handleSessionExpired();
-    else if (notify) showActionToast(lt`${reason === 'automatic' ? t('自動更新') : t('更新')}に失敗しました: ${error?.message || error}`, { error: true, delay: 5000 });
-    else setStatus(lt`取得に失敗しました: ${error?.message || error}`, true);
+    else {
+      state.loadFailed = true;
+      const message = readFailureMessage('friends', error);
+      setStatus(message, true);
+      if (notify) showActionToast(message, { error: true, delay: 5600 });
+      console.warn('Could not load primary data:', error);
+    }
   } finally {
     if (generation === state.loadGeneration) { state.loading = false; actionToast.setUndoBusy(false); }
-    if (elements.reloadButton) elements.reloadButton.disabled = state.loading;
+    updateReloadButton();
   }
 }
 
@@ -2717,7 +3022,7 @@ elements.instanceDisplay?.addEventListener('change', () => {
 document.querySelectorAll('.theme-button').forEach((button) => {
   button.addEventListener('click', () => {
     const theme = button.dataset.theme;
-    if (!['light', 'ash', 'dark-blue', 'dark'].includes(theme) || theme === state.theme) return;
+    if (!['light', 'sand', 'mist', 'ash', 'dark-blue', 'dark'].includes(theme) || theme === state.theme) return;
     state.theme = theme;
     applyTheme();
     persistUiPreferences();
@@ -2785,6 +3090,11 @@ function bindSearch(input, callback) {
   input?.addEventListener('input', event => { if (!composing && !event.isComposing) { resetDisplayLimits(); callback(); } });
 }
 bindSearch(elements.friendSearch, renderFriendSidebar);
+elements.showNonFriendOwners?.addEventListener('change', () => {
+  state.showNonFriendOwners = elements.showNonFriendOwners.checked;
+  persistUiPreferences(); render({resetScroll:false});
+  if (state.friendPreview.location) renderFriendInstancePreview(getCurrentInstanceEntry(state.friendPreview.location));
+});
 elements.offlineSort?.addEventListener('change', () => {
   state.offlineSort = elements.offlineSort.value;
   resetDisplayLimits(); persistUiPreferences(); render();
@@ -2838,6 +3148,18 @@ elements.friendList?.addEventListener('mousemove', onFriendSidebarMouseMove, { p
 elements.friendList?.addEventListener('mouseout', onFriendSidebarMouseOut);
 elements.friendList?.addEventListener('mouseleave', onFriendSidebarMouseLeave);
 elements.friendList?.addEventListener('scroll', () => hideFriendInstancePreview({ immediate: true }), { passive: true });
+elements.list?.addEventListener('keydown',event=>{
+  const tab=event.target.closest('[data-world-tab]');if(!tab || !['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+  const tabs=[...elements.list.querySelectorAll('[data-world-tab]')],i=tabs.indexOf(tab);
+  const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(i+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+  event.preventDefault();tabs[next].focus();tabs[next].click();
+});
+elements.list?.addEventListener('click', onWorldViewClick);
+elements.friendInstancePreview?.addEventListener('click', onWorldViewClick);
+elements.list?.addEventListener('submit', event=>{void saveWorldListName(event)});
+elements.list?.addEventListener('input', event=>{if(event.target.matches('.world-list-name') && worldView.editor && !worldView.editor.saving){worldView.editor.draft=event.target.value;event.target.closest('form').querySelector('.world-name-count').textContent=`${event.target.value.length} / 20`;}});
+elements.list?.addEventListener('keydown',event=>{if(event.target.closest('[data-world-list-editor]')){if(event.key==='Escape'&&!event.isComposing&&!worldView.editor?.saving){event.preventDefault();worldView.editor=null;render();}if(event.key==='Enter'&&event.isComposing)event.preventDefault();}});
+document.addEventListener('click',event=>{const editor=worldView.editor;if(!editor||editor.saving||event.target.closest('[data-world-list-editor],[data-world-edit]'))return;queueMicrotask(()=>{if(editor===worldView.editor){worldView.editor=null;render()}})},true);
 elements.list?.addEventListener('click', onFriendViewControlClick);
 elements.list?.addEventListener('submit', event => { void saveFavoriteGroupName(event); });
 elements.list?.addEventListener('input', event => {
@@ -2875,14 +3197,24 @@ elements.loginButton?.addEventListener('click', () => {
   window.open(CONFIG.LOGIN_URL, '_blank', 'noopener,noreferrer');
 });
 
-elements.reloadButton?.addEventListener('click', async () => {
-  if (state.loading) return;
+elements.recentButton?.addEventListener('click', setRecentView);
+
+function updateReloadButton() {
+  if (elements.reloadButton) elements.reloadButton.disabled = Boolean(state.loading || worldView.loading || state.recent.loading);
+}
+
+async function refreshCurrentView() {
+  if (state.loading || worldView.loading || state.recent.loading) return;
   if (state.favoriteMutationPending || state.pendingInvites.size) {
     showActionToast(t('操作の完了後に更新してください。'));
     return;
   }
+  const needsPrimaryRetry = !state.user || state.loadFailed || state.groupLoadFailed
+    || (elements.showOffline?.checked && state.offlineNameLoad.failed);
+  if (!needsPrimaryRetry && state.viewMode === VIEW_MODES.RECENT) { worldView.editor=null; await loadWorldView({ force: true }); return; }
   await load({ reason: 'manual' });
-});
+}
+elements.reloadButton?.addEventListener('click', refreshCurrentView);
 elements.clearCacheButton?.addEventListener('click', async () => {
   if (state.favoriteMutationPending || state.pendingInvites.size) {
     showActionToast(t('操作の完了後にキャッシュを削除してください。'));

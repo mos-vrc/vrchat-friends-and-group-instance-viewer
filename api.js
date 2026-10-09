@@ -353,6 +353,7 @@ export class DataRepository {
     this.favoriteCache = null;
     this.groupInstancesCache = null;
     this.usedStaleFallback = false;
+    this.groupInstancesError = null;
     this.primaryDataUpdatedAt = 0;
   }
 
@@ -393,6 +394,7 @@ export class DataRepository {
     // A login/account switch starts a new primary-data lifecycle. Do not carry
     // stale-fallback state or a previous account's timestamp into the new one.
     this.usedStaleFallback = false;
+    this.groupInstancesError = null;
     this.primaryDataUpdatedAt = 0;
     this.friendCache = new ValueCache(
       this.storage,
@@ -494,7 +496,7 @@ export class DataRepository {
 
   async fetchFriends() {
     this.requireCurrentUser();
-    // Friend status is time-sensitive (including `Other Platform`). Always ask
+    // Friend status is time-sensitive (including `OtherPlatform`). Always ask
     // VRChat for the current friend list on a normal load/reload. Keep the
     // same-account cache only as a transient-error fallback.
     try {
@@ -759,6 +761,7 @@ export class DataRepository {
   }
 
   async fetchGroupInstances(userId) {
+    this.groupInstancesError = null;
     this.requireCurrentUser();
     if (userId !== this.currentUserId) throw new Error('Group instance request account mismatch.');
     try {
@@ -769,6 +772,7 @@ export class DataRepository {
     } catch (error) {
       if (error?.name === 'AbortError') throw error;
       if (error?.status === 401) throw error;
+      this.groupInstancesError = error;
       const cached = this.groupInstancesCache.getStale();
       if (cached?.userId === userId && Array.isArray(cached.items)) {
         this.usedStaleFallback = true;
