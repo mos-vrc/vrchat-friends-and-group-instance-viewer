@@ -1,3 +1,4 @@
+import { buildApiHeaderRules } from './api-header-rules.js';
 import { CONFIG } from './config.js';
 import { isAllowedApiUrl, SharedRequestGate } from './request-policy.js';
 
@@ -6,6 +7,7 @@ const pendingGets = new Map();
 let apiRuleInstalled = false;
 const API_USER_AGENT_RULE_ID = 1001;
 let apiRulePromise = null;
+let apiRuleError = "";
 
 function buildApiUserAgent() {
   const version = chrome.runtime.getManifest()?.version || 'unknown';
@@ -13,37 +15,22 @@ function buildApiUserAgent() {
 }
 
 async function ensureApiUserAgentRule() {
-  if (!chrome.declarativeNetRequest?.updateSessionRules) return false;
+  if (!chrome.declarativeNetRequest?.updateSessionRules) { apiRuleError="Chrome declarativeNetRequest API is unavailable"; return false; }
   if (apiRuleInstalled) return true;
   if (apiRulePromise) return apiRulePromise;
 
   apiRulePromise = (async () => {
     try {
       await chrome.declarativeNetRequest.updateSessionRules({
-        removeRuleIds: [API_USER_AGENT_RULE_ID],
-        addRules: [{
-          id: API_USER_AGENT_RULE_ID,
-          priority: 100,
-          action: {
-            type: 'modifyHeaders',
-            requestHeaders: [{
-              header: 'user-agent',
-              operation: 'append',
-              value: buildApiUserAgent(),
-            }],
-          },
-          condition: {
-            regexFilter: '^https://(vrchat\\.com|api\\.vrchat\\.cloud)/api/1/',
-            requestDomains: ['vrchat.com', 'api.vrchat.cloud'],
-            initiatorDomains: [chrome.runtime.id],
-            resourceTypes: ['xmlhttprequest'],
-          },
-        }],
+        removeRuleIds: [API_USER_AGENT_RULE_ID, 1002, 1003, 1004, 1005],
+        addRules: buildApiHeaderRules(chrome.runtime.id, buildApiUserAgent()),
       });
+      apiRuleError = "";
       apiRuleInstalled = true;
       return true;
     } catch (error) {
-      console.warn('Could not install VRChat API User-Agent rule:', error);
+      apiRuleError=String(error?.message || error).slice(0,500);
+      console.warn('Could not install VRChat API header rules:', apiRuleError);
       return false;
     } finally {
       apiRulePromise = null;
@@ -66,6 +53,12 @@ async function handleApiFetch(message) {
   const method = String(message.method || 'GET').toUpperCase();
   // Only methods used by this extension; no arbitrary header forwarding.
   if (!['GET', 'POST', 'DELETE', 'PUT'].includes(method)) return { ok: false, status: 400, text: '' };
+  const requestUrl=new URL(message.url);
+  // Keep exact write routes enforced even though declarative filters are broad.
+  if (method !== 'GET' && requestUrl.search) return { ok:false,status:400,text:'' };
+  if (method === 'POST' && requestUrl.pathname !== '/api/1/favorites'
+    && !/^\/api\/1\/invite\/myself\/to\/[^?#]+$/.test(requestUrl.pathname)) return { ok:false,status:400,text:'' };
+  if (method === 'DELETE' && !/^\/api\/1\/favorites\/fvrt_[A-Za-z0-9_-]+$/.test(requestUrl.pathname)) return { ok:false,status:400,text:'' };
   if (method === 'PUT') {
     const url = new URL(message.url);
     let body;
@@ -83,13 +76,16 @@ async function handleApiFetch(message) {
 }
 
 async function performApiFetch(message, method) {
+  const headersInstalled = await ensureApiUserAgentRule();
+  if (method !== 'GET' && !headersInstalled) {
+    return { ok: false, status: 0, text: '', code: 'API_HEADERS_UNAVAILABLE', diagnostic: apiRuleError || 'Header rules unavailable', outcomeUnknown: false };
+  }
   const slot = await requestGate.claim();
   // Wait in the page, not inside a sleeping MV3 worker. Recheck on every retry.
   if (!slot.granted) return { ok: false, status: 0, deferred: true, retryAt: slot.retryAt, text: '' };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CONFIG.API_TIMEOUT_MS);
   try {
-    await ensureApiUserAgentRule();
     const headers = { Accept: 'application/json' };
     if (typeof message.body === 'string') headers['Content-Type'] = 'application/json';
     const response = await fetch(message.url, {
@@ -100,7 +96,7 @@ async function performApiFetch(message, method) {
     const retryAfter = response.headers.get('Retry-After') || '';
     let retryAt = 0;
     if (response.status === 429 || response.status >= 500) {
-      retryAt = await requestGate.pause(retryAfter, response.status === 429 ? 2000 : 1000);
+      retryAt = response.status === 429 ? await requestGate.rateLimited(retryAfter) : await requestGate.pause(retryAfter, 1000);
     }
     return { ok: response.ok, status: response.status, retryAfter, retryAt, text: await response.text() };
   } catch (error) {
@@ -121,7 +117,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'ENSURE_API_USER_AGENT_RULE') {
-    ensureApiUserAgentRule().then((installed) => sendResponse({ installed }));
+    ensureApiUserAgentRule().then((installed) => sendResponse({ installed, diagnostic: apiRuleError }));
     return true;
   }
 

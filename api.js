@@ -63,8 +63,13 @@ export class VrchatApiClient {
       const error = new ApiError(response.status, response.code === 'TIMEOUT'
         ? t('通信がタイムアウトしました。時間をおいて再試行してください。')
         : `VRChat API ${response.status}`);
+      let rejection = '';
+      try { rejection = JSON.parse(response.text)?.error?.message || ''; } catch {}
+      error.apiOriginRejected = response.status === 403 && /^Origin .+ not acceptable$/i.test(rejection.trim());
+      error.apiHeadersUnavailable = response.code === 'API_HEADERS_UNAVAILABLE';
       error.code = response.code;
-      error.outcomeUnknown = method !== 'GET' && (response.outcomeUnknown || response.status === 0 || response.status >= 500);
+      error.diagnostic = response.diagnostic || "";
+      error.outcomeUnknown = method !== 'GET' && !error.apiHeadersUnavailable && (response.outcomeUnknown || response.status === 0 || response.status >= 500);
       throw error;
     }
   }
@@ -677,6 +682,7 @@ export class DataRepository {
       }
     } catch (error) {
       if (error?.name === 'AbortError') throw error;
+      if (error?.apiOriginRejected || error?.apiHeadersUnavailable) { error.favoriteNeedsManualRefresh=deletedIds.length>0; throw error; }
       if (error?.outcomeUnknown) { error.favoriteOutcomeUnknown = true; throw error; }
       // A partial delete is rare, but if it occurs, try to restore the old list.
       if (deletedIds.length && oldTags.length) {
@@ -696,6 +702,7 @@ export class DataRepository {
       createdRecord = await this.api.addFriendFavorite(userId, targetTags);
     } catch (error) {
       if (error?.name === 'AbortError') throw error;
+      if (error?.apiOriginRejected || error?.apiHeadersUnavailable) { error.favoriteNeedsManualRefresh=deletedIds.length>0; throw error; }
       if (error?.outcomeUnknown) { error.favoriteOutcomeUnknown = true; throw error; }
       // Only an actual write failure triggers rollback. A later refresh failure
       // must never undo an already-successful Favorite move.

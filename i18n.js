@@ -1,5 +1,6 @@
 // Only static UI source text is translated. API/user content is never scanned.
 const english = Object.freeze({
+  "VRChatの通信制限に達しました。時間をおいて更新し、Favoriteの登録状態を確認してください。": "VRChat rate limit reached. Wait, then refresh to check your Favorites.",
   "フレンド情報を取得できませんでした。更新ボタンで再取得してください。": "Could not load friends. Use the refresh button to retry.",
   "一部のGroup情報を取得できませんでした。更新ボタンで再取得してください。": "Some Group information could not be loaded. Use the refresh button to retry.",
   "一部のOffline情報を取得できませんでした。更新ボタンで再取得してください。": "Some Offline information could not be loaded. Use the refresh button to retry.",
@@ -50,6 +51,8 @@ const english = Object.freeze({
   "Favoriteを更新しました（再同期に失敗しました。更新で再確認してください）。": "Favorites updated (sync failed; refresh to verify).",
   "Favoriteが別の画面で変更されたため、操作を中止しました。": "Favorites changed elsewhere. The operation was cancelled.",
   "ワールドFavoriteの変更に失敗し、元の登録も復元できませんでした。更新で確認してください。": "World Favorite change and restoration failed. Refresh to verify.",
+  "通信設定を準備できませんでした。拡張機能を再読み込みしてください。詳細:": "Could not prepare connection settings. Reload the extension. Details:",
+  "VRChatへの変更要求を送信できませんでした。拡張機能を再読み込みしてください。移動途中の場合は、時間をおいて更新し、公式ページで登録状態を確認してください。": "Could not send changes to VRChat. Reload the extension. If a move was interrupted, wait before refreshing and check your Favorites on the official website.",
   "ワールドFavoriteを変更できませんでした。登録上限やアクセス権を確認してください。": "Could not change world Favorites. Check the list limit and access permissions.",
   "空リストの登録に失敗しました。改善しない場合は、公式ページから各リストへ最低ひとつ以上のワールドをお気に入り登録した後、この拡張機能の更新ボタンで再取得してください。": "Could not register a world in an empty list. If the issue persists, add at least one world to each list on the official website, then use this extension’s refresh button.",
   "取得不可のワールドは移動・再登録できません。Favoriteの解除は元に戻せない可能性があります。": "Unavailable worlds cannot be moved or added again. Removing a Favorite may be irreversible.",

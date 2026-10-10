@@ -7,8 +7,9 @@ import { isAllowedApiUrl } from './request-policy.js';
  * with credentials: 'include'. Chrome's normal cookie jar attaches applicable
  * VRChat cookies; this extension never reads, stores, or constructs them.
  *
- * declarativeNetRequest is used only to append the extension identifier to the
- * browser User-Agent while preserving the normal Chrome User-Agent.
+ * declarativeNetRequest appends the extension identifier to the browser
+ * User-Agent and sets Origin for narrowly scoped VRChat write endpoints.
+ * It never reads or modifies Cookie headers.
  */
 export class SessionError extends Error {
   constructor(code, message) {
@@ -75,6 +76,7 @@ export async function fetchUsingVrchatSession(url, options = {}) {
       deferred: response.deferred === true,
       retryAt: Number(response.retryAt) || 0,
       code: response.code || '',
+      diagnostic: typeof response.diagnostic === 'string' ? response.diagnostic : '',
       outcomeUnknown: response.outcomeUnknown === true,
     };
   } catch (error) {

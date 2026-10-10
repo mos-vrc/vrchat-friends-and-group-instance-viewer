@@ -81,9 +81,15 @@ export class SharedRequestGate {
 
   release() { this.active = Math.max(0, this.active - 1); }
 
-  async pause(value, fallbackMs) {
+  async rateLimited(value) {
+    // Match the earlier short cooldown. Honor the server's Retry-After;
+    // use two seconds only when no valid deadline was supplied.
+    return this.pause(value, 2000);
+  }
+
+  async pause(value, fallbackMs, minimumMs = 0) {
     await this.ready;
-    this.blockedUntil = Math.max(this.blockedUntil, retryAfterDeadline(value, this.now(), fallbackMs));
+    this.blockedUntil = Math.max(this.blockedUntil, retryAfterDeadline(value, this.now(), fallbackMs), this.now() + minimumMs);
     // Serialize writes so an earlier response cannot overwrite a longer wait.
     const write = this.tail.then(() => this.store.save(this.blockedUntil));
     this.tail = write.catch(() => {});

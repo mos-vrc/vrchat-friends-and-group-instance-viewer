@@ -1,7 +1,7 @@
 # Privacy Policy
 ## VRChat Friends & Group Instance Viewer
 
-最終更新日: 2026年10月9日
+最終更新日: 2026年10月10日
 
 本拡張機能は、VRChatのフレンド・インスタンス・ワールドを一覧表示し、Favoriteを管理する非公式Chrome拡張機能です。VRChat Inc.によって制作、承認、または提供されているものではありません。
 

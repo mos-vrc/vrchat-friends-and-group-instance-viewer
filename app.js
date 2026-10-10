@@ -2374,6 +2374,7 @@ async function changeWorldFavorite(worldId, desired, expected, undo=false) {
   if(CONFIG.DEBUG_MODE || CONFIG.SCREENSHOT_MODE){showActionToast(t('撮影用モード: ワールドFavoriteは変更しません。'),{delay:2600});closeFavoriteMenu();return}
   if(state.loading || state.favoriteMutationPending || !worldFavorites)return;
   const store=worldFavorites,generation=state.loadGeneration,account=state.user?.id;
+  let deferWorldReload=false;
   actionToast.clearUndo();state.favoriteUndo=null;state.favoriteMutationPending=true;state.favoriteMenu.busy=true;
   elements.favoriteMenu?.querySelectorAll('button').forEach(b=>{b.disabled=true});
   showActionToast(t('Favoriteを更新中…'),{delay:0});
@@ -2397,11 +2398,15 @@ async function changeWorldFavorite(worldId, desired, expected, undo=false) {
   }catch(error){
     if(generation!==state.loadGeneration||error?.name==='AbortError')return;
     if(error?.status===401){handleSessionExpired();return}
+    deferWorldReload=Boolean(error?.apiOriginRejected || error?.apiHeadersUnavailable || error?.status===429);
     // Reconcile a failed or uncertain write once; no blind write retry.
-    if(!error?.favoriteNoMutation)try{await store.load(true)}catch{store.ready=false}
+    if(!error?.favoriteNoMutation && !error?.apiOriginRejected && !error?.apiHeadersUnavailable && error?.status!==429)try{await store.load(true)}catch{store.ready=false}
     if(generation!==state.loadGeneration||store!==worldFavorites)return;
     closeFavoriteMenu();render({resetScroll:false});
-    const message=error?.favoriteWorldUnavailable ? t('取得不可または再登録できないワールドのため、登録を変更せずに中止しました。Favoriteの解除のみ可能です。')
+    const message=error?.status===429 ? t('VRChatの通信制限に達しました。時間をおいて更新し、Favoriteの登録状態を確認してください。')
+      : error?.apiHeadersUnavailable ? t('通信設定を準備できませんでした。拡張機能を再読み込みしてください。詳細:')+' '+(error.diagnostic || error.code || 'API_HEADERS_UNAVAILABLE')
+      : error?.apiOriginRejected ? t('VRChatへの変更要求を送信できませんでした。拡張機能を再読み込みしてください。移動途中の場合は、時間をおいて更新し、公式ページで登録状態を確認してください。')
+      : error?.favoriteWorldUnavailable ? t('取得不可または再登録できないワールドのため、登録を変更せずに中止しました。Favoriteの解除のみ可能です。')
       : error?.favoriteNoMutation ? t('ワールド情報を確認できませんでした。Favoriteの登録は変更していません。時間をおいて再試行してください。')
       : error?.favoriteConflict ? t('Favoriteが別の画面で変更されたため、操作を中止しました。')
       : error?.outcomeUnknown ? t('変更結果を確認できませんでした。更新してFavoriteの状態を確認してください。')
@@ -2409,7 +2414,7 @@ async function changeWorldFavorite(worldId, desired, expected, undo=false) {
       : error?.favoriteListSetupSuggested ? t('空リストの登録に失敗しました。改善しない場合は、公式ページから各リストへ最低ひとつ以上のワールドをお気に入り登録した後、この拡張機能の更新ボタンで再取得してください。')
       : t('ワールドFavoriteを変更できませんでした。登録上限やアクセス権を確認してください。');
     showActionToast(message,{error:true,delay:error?.favoriteListSetupSuggested?15000:6000});
-  }finally{if(generation===state.loadGeneration){state.favoriteMutationPending=false;state.favoriteMenu.busy=false;render({resetScroll:false});if(state.viewMode===VIEW_MODES.RECENT&&worldView.selected!=='recent')void loadWorldView()}}
+  }finally{if(generation===state.loadGeneration){state.favoriteMutationPending=false;state.favoriteMenu.busy=false;render({resetScroll:false});if(!deferWorldReload&&state.viewMode===VIEW_MODES.RECENT&&worldView.selected!=='recent')void loadWorldView()}}
 }
 function onWorldFavoriteClick(event) {
   const button=event.target.closest('.world-favorite-button');
@@ -2493,7 +2498,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   renderFriendSidebar();
 
   const manifest = globalThis.chrome?.runtime?.getManifest?.();
-  const appVersion = manifest?.version_name || manifest?.version || '1.6.3';
+  const appVersion = manifest?.version_name || manifest?.version || '1.6.4.3';
   const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
   if (state.viewMode === VIEW_MODES.RECENT) {
     patchMarkup(elements.list, `${renderRecentWorlds()}${credit}`);

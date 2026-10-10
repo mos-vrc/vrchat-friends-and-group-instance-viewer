@@ -123,11 +123,36 @@ export class WorldFavorites {
     }
     return {id:record.id,type:row.type,tags:[...record.tags]};
   }
+  async refreshMembership(worldId) {
+    if(this.inflight)await this.inflight;
+    const current=this.current(worldId);
+    if(!this.ready || !current.length || Date.now()-this.updatedAt>=300000){
+      await this.load(true);return;
+    }
+    // Recheck only source lists before deletion. The API supports a tag filter;
+    // do not invent a world-ID query filter. Snapshot timestamps are unchanged
+    // because this does not refresh all lists or account entitlements.
+    const scopes=[...new Map(current.flatMap(r=>r.tags.map(tag=>[`${r.type}:${tag}`,{type:r.type,tag}]))).values()];
+    const rowsById=new Map();
+    for(const {type,tag} of scopes){
+      const rows=await this.api.fetchListPages(offset=>this.api.fetchJson(`/favorites?type=${type}&tag=${encodeURIComponent(tag)}&n=${CONFIG.API_PAGE_SIZE}&offset=${offset}`),5000,
+        r=>r && /^fvrt_[A-Za-z0-9_-]+$/.test(r.id||'') && validId(r.favoriteId) && (!r.type||r.type===type)
+          && Array.isArray(r.tags) && r.tags.includes(tag) && r.tags.every(name=>validGroup({type,name})),r=>r.id);
+      for(const r of rows)rowsById.set(r.id,{...r,type,tags:[...new Set(r.tags)]});
+    }
+    const records=new Map([...this.records].map(([id,rows])=>[id,rows.filter(r=>!scopes.some(s=>s.type===r.type&&r.tags.includes(s.tag)))]));
+    for(const r of rowsById.values()){
+      const list=records.get(r.favoriteId)||[];
+      records.set(r.favoriteId,[...list.filter(old=>old.id!==r.id),{id:r.id,type:r.type,tags:r.tags}]);
+    }
+    for(const [id,rows] of records)if(!rows.length)records.delete(id);
+    this.records=records;
+  }
   async change(worldId, desired, expected) {
     if(!validId(worldId) || this.pending) throw new Error('World Favorite operation unavailable');
     this.pending=true;
     try {
-      await this.load(true);
+      try{await this.refreshMembership(worldId)}catch(error){error.favoriteNoMutation=true;throw error}
       const previous=this.current(worldId);
       if(signature(previous)!==signature(expected)) {const e=new Error('World Favorite changed elsewhere');e.favoriteConflict=true;throw e}
       if(desired.some(r=>!TYPES.has(r.type)||!r.tags.length||r.tags.some(tag=>!this.groups.some(g=>g.type===r.type&&g.name===tag))))throw new Error('World Favorite list unavailable');
@@ -150,6 +175,13 @@ export class WorldFavorites {
         for(const row of previous){await this.api.removeFavoriteRecord(row.id);deleted.push(row)}
         for(const row of desired){created.push(await this.add(worldId,row))}
       } catch(error) {
+        if(error?.apiOriginRejected || error?.apiHeadersUnavailable){
+          // The same Origin/configuration rejection would also reject restoration.
+          // Avoid more writes and a whole-account read storm; require explicit refresh.
+          error.favoriteNoMutation = deleted.length === 0 && created.length === 0;
+          error.favoriteNeedsManualRefresh = !error.favoriteNoMutation;
+          this.ready=false;this.updatedAt=0;throw error;
+        }
         if(error?.name==='AbortError'||error?.outcomeUnknown)throw error;
         // Roll back only confirmed rejected operations. Never replay an
         // uncertain POST/DELETE, including an uncertain rollback request.
@@ -162,10 +194,10 @@ export class WorldFavorites {
       }
       if(created.length)this.records.set(worldId,created);else this.records.delete(worldId);
       // DELETE succeeded and every POST response has been validated. Apply
-      // those confirmed records to the fresh preflight snapshot rather than
+      // those confirmed records to the verified membership snapshot rather than
       // downloading every account Favorite a second time. Failures still use
       // the existing single reconciliation path in the caller.
-      this.updatedAt=Date.now();
+      // Only this world was changed; do not extend whole-account freshness.
       return {previous,expected:created,syncFailed:false,syncError:null};
     } finally {this.pending=false}
   }
