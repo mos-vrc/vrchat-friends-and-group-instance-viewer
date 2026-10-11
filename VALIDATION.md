@@ -1,34 +1,96 @@
 # 検証内容 / Validation
 
-## Pagination policy
+## Private欄のアイコン配置
 
-Favorites (world, vrcPlusWorld and friend) and online/Offline friend lists request n=100. The offset still advances by the actual returned array length. An empty page confirms completion; a short page is not treated as completion. Validation, duplicate-page detection, abort and safety limits remain active. Request concurrency and rate-limit waiting follow the shared request policy.
+「すべて」のPrivateを展開し、横幅620／860／1280px、表示サイズ小／中／大、シンプル／ノーマルの18通りで確認しました。ユーザー一覧の幅がPrivateカードの全幅と一致し、実際に利用可能な幅・アイコン幅・余白から計算した数のアイコンが同じ行に並ぶことを検査しました。
 
-Sources reviewed on 2026-10-09 (community-maintained API specifications, not official VRChat documentation):
-- https://vrchat.community/reference/get-favorites — n: 1–100, zero-based offset.
-- https://vrchat.community/reference/get-friends — n: 1–100; offline flag.
-- https://vrchat.community/reference/get-recent-worlds — n: 1–100. Recent keeps the previously observed 50-slot window because inaccessible rows can be filtered. Returned length does not reveal consumed slots or a server cap, so increasing its offset blindly risks skipping worlds.
+撮影用の画像、6テーマ、日英、各タブ、8つのFavoriteワールドリスト、再読み込み等の既存10項目も通過しています。Private欄の検査を含め、このCSS変更では11項目を確認しました。以下のVRC+・通信等の検査はその変更時の記録です。
 
-Typed group-content batch loading, shared in-flight reads, cached world details and confirmed Favorite-write updates prevent individual or duplicate requests. Endpoints without documented pagination are not given speculative paging parameters.
+## VRC+のFavoriteワールドリスト
 
-## Verification
+ログインユーザーのsystem_supporterタグで加入を判定します。公式WebアプリでもこのタグをhasVRCPlusに使用していることをソースから確認しました。system_early_adopterは判定に使用しません。追加の購入履歴・サブスクリプション要求は行いません。
 
-Pagination checks cover complete IDs/order, server cap 50, Offline parameters, empty/exact-100 lists, repeated pages, abort, 403/429 propagation and Recent filtered rows/final-page repetition. Favorite tests cover add/move/remove/undo, unavailable worlds, sparse/legacy/VRC+ list metadata, external conflicts and uncertain writes. Chromium checks cover Friend hydration after cache deletion/reopen, release UI, feedback/retry and unavailable-world safety. Browser API writes use controlled responses; no live account data is changed. This Chromium is tested using local HTTP, package CSP and a runtime shim, not installed-extension service-worker verification.
+単体8項目と通常画面のブラウザ4項目で、未加入にもmaxFavoriteGroups=4が返る場合、加入中の空リスト、過去のPlusレコード、加入状態の変更、別アカウントへの切り替え、旧Plus選択から足跡への復帰を確認しました。未加入では通常4リスト・登録先4つのみ表示し、専用API通信を行いません。不正なPlus移動は元のFavoriteを削除する前に拒否します。
 
+通信10項目、ネイティブセッション10項目、選択リスト6項目、取得不可ワールドの登録・移動・解除9項目、フレンド情報の再取得11項目、撮影用の画像・8リスト・日英・6テーマ等10項目の既存検査も通過しています。合計68項目。撮影用はVRC+加入中の仮データを維持します。
 
-## Origin rule and failure handling verification
+ブラウザ検証は実際の画面に制御したAPI応答を返す方式です。実アカウントでのVRC+加入・解除やライブAPIへの変更操作、インストールした拡張機能の実DNRヘッダー適用は今回の検証対象外です。
 
-Header rule tests verify scope to the extension initiator, HTTPS vrchat.com, known Favorite/rename/InviteMe write paths, POST/DELETE/PUT, and no Cookie modification. Worker tests verify installation before writes and no network write if installation fails. API tests use the supplied 403 JSON and verify that it is classified without replay. World operation tests cover first registration and an interrupted move after DELETE, with no futile restore writes. Chromium UI tests verify Japanese/English failure guidance and no automatic full Favorite reread after Origin rejection; generic rejected-write rollback and 429 behavior remain covered.
+## ワールド管理ボタン
 
-The test Chromium can render and test the UI but does not expose an installed-extension service worker. Thus actual declarativeNetRequest header application and successful live VRChat writes have not been verified here. No live-account changes were made. The reported 429 indicates server throttling; suppressing avoidable follow-up reads reduces load but does not guarantee absence of throttling.
+6テーマでワールド管理とフレンド表示を切り替え、aria-pressedとactiveクラスが正しく切り替わることを確認します。マウスを離した選択色・枠・文字色・影がフレンドタブと一致すること、未選択時も同じタブスタイルになること、キーボードフォーカス枠が残ることを検査します。
 
+## Group一覧の取得順
 
-## Header setup diagnostics
+インスタンス詳細の応答を停止させた本番画面で、ワールド名・画像が先に描画され、Groupインスタンス一覧が未開始であることを確認します。応答を再開したとき、最初の表示範囲の詳細取得完了後にGroup一覧が一度だけ要求されることを、要求時点の完了ID集合で検査します。旧版ではこの順序検査が失敗することを比較します。
 
-The user reported no network POST when the v1.6.4 message appeared. This identifies an unsent header-setup failure rather than a live VRChat rejection, but the original Chrome exception was not captured. The long Origin regex has been replaced by four small URL filters, while exact write routes/query checks remain in the worker. Tests emulate a rejected rule installation and verify the original diagnostic reaches the localized UI, sends no DELETE or POST, and preserves registration. They do not establish that regex complexity was the original installation error. Installed-extension validation remains unavailable in this test Chromium, even with the default disable-extensions argument removed. Live VRChat success is not asserted.
+保存済みワールド管理画面ではGroup一覧要求が発生せず、Groupタブへ移ると取得されること、保存済みGroupタブではフレンドのカードが表示されなくても一覧を取得すること、詳細の404でも待機が解除されることを確認します。タイマーでの固定待機・ポーリングは追加していません。通常のAPI並列上限・開始間隔・429待機は維持します。
 
-Results: 82 controlled checks passed (45 Node, 29 production browser and 8 screenshot UI checks). Syntax, JSON, package integrity and source hashes were verified.
+## 余白と表示範囲の取得
 
-## Request throttling verification
+日英・620px／1280px・足跡／Favoriteリストで、初期表示とスクロール後のタブ上端が右ペイン上端と一致し、ボタン上端には背景内の6pxの余白があることを検証します。通常のインスタンス表示の余白は維持します。
 
-Controlled-clock tests cover two-second shared fallback cooldown, bounded 1/2/4-second per-request retries, server Retry-After seconds/date, concurrent responses, persisted deadlines, single concurrency and 500ms spacing. A 340-world fixture verifies that a move checks only its 90-world source list (two paged requests), preserves unrelated memberships and does not extend global snapshot freshness. External moves, stale/new registrations and 429 before deletion remain covered. Chromium tests exercise bounded retries, recovery and localized guidance with controlled API responses.
+旧版で右側のスクロールにより左側の取得待ちが消えることを単体テストで再現し、修正版では左側の現在の表示範囲を保持し、画面外の未開始処理を除外することを確認します。右側の取得を優先し、重複排除と2並列の上限は維持します。ワールド管理への切り替えで前画面の未開始インスタンス要求が停止し、戻ったときに表示できることも本番画面で確認します。
+
+## 初回ワールド表示
+
+40インスタンスの本番画面でインスタンスAPIの応答を停止させ、初回に見えるワールド名とサムネイルが先に表示されることを確認します。応答を再開した後の表示完成、下方スクロール後のインスタンス応答に含まれるワールド情報の再利用、追加ワールド要求が最大4種類以内であることを検証します。
+
+インスタンスの404が発生しても取得済みのワールド名・画像は保持し、詳細取得のループが発生せず更新で復旧することを確認します。ワールド404・キャッシュ削除・タブ終了と再起動も回帰テスト対象です。APIの応答は制御したテスト用で、実通信での改善秒数は測定していません。
+
+## スクロール時の先読み
+
+40インスタンスを持つ本番画面で、詳細APIを遅延させて下方へスクロールし、進行中の最大2件に続いて新しい表示範囲の取得が始まることを検証します。上へ戻る操作、「すべて」「Favorite+」「Favorite」「フレンド」の切り替え、画像の下方・上方へのスクロール後の復帰も確認します。
+
+コントローラー単体で、旧位置の未開始処理の整理、新しい表示範囲の優先、同じインスタンスの重複排除、画像の開始前の並び替えを検証します。無変更・中止後のループ防止と表示中のpagehide、実際のタブ終了・再起動も回帰テスト対象です。API最大2並列・画像最大10並列と429待機は維持します。
+
+## Favoriteリストと固定タブ
+
+選択リストの応答を先に返し、全Favoriteの応答を停止させた本番画面テストで、60件の名前とリンクが表示されることを確認します。選択リストの取得は1回、応答にワールド情報が揃う場合の追加詳細取得は0回です。全リストの確認中はFavorite編集を無効にし、確認完了後に★表示へ更新します。空リスト、部分応答、不正行、重複行、異なるリストの行、古い画面への応答、429・通信失敗も検証します。
+
+日本語と英語で右側一覧をスクロールし、ワールドリストのタブがスクロール領域の上端に残ること、読み込み中に別タブへ移っても古い結果が表示を戻さないことを検証します。画像は最大10並列・開始間隔10msを確認します。
+
+## 足跡と画像
+
+足跡の後続ページとFavoriteの応答を遅延させ、最初の50件がFavorite要求より先に表示され、全57件のワールドへのリンクを利用できることを確認します。Favorite確認中は灰色の「…」で操作を無効にし、確認後に★番号と未登録表示へ切り替わります。タブ切り替えによる後続ページの停止、ページ途中の不正応答・通信失敗、重複排除と50刻みのoffsetも検証します。
+
+標準のユーザー／ワールド画像256pxと画像並列数10件を確認し、本番画面からの画像要求でも256pxを検査します。署名付きURLの維持とサイズ指定URLのフォールバックは既存の検証対象です。
+
+## 通信設計の検証
+
+同一GETの10呼び出しを1回に集約し、応答の変更が別の呼び出し元へ影響しないこと、失敗後の再取得、変更操作を挟んだ古い応答との分離、クライアント・アカウントの分離を確認します。Offlineページの30秒再利用、期限切れ、アカウント変更・終了時の破棄も対象です。
+
+制御したAPI応答での比較では、足跡で取得済みの60ワールドをFavorite一覧で表示するときの追加詳細取得は60回から0回になります。100件すべてで詳細取得の429再試行が尽きる場合、詳細取得の呼び出しは100件から最大2件に抑えます。後者はAPIクライアント内の再試行を含むHTTP総数ではありません。通信障害を取得不可として保存しないこと、処理中の正常応答を保持すること、更新で復旧できることを確認します。
+
+本番画面の統合テストで、足跡からFavoriteリストへの切り替えに追加ワールド取得が不要なこと、不正応答では「読み込み失敗」と表示すること、更新で全カードが復旧することを確認します。画像の古いハンドルを解放しても新しい取得が残ること、既存の共有・上限・429待機・中止も検証します。
+
+## 通信と再起動
+
+追加した終了処理テストでは、表示状態のままインスタンス取得中にpagehideを発生させます。旧版でタイマーとConsoleの単純な式に応答せず、エラーも出ない状態を再現し、修正版で同じ式とタイマーに応答して画面が復帰することを比較します。コントローラー単体では旧版の無変更完了がマイクロタスクを連続生成すること、修正版で中止・停止・無変更完了を再投入しないこと、再描画による置き換えと明示的な再取得を維持することを検証します。実際のタブ終了時のChrome拡張機能上での発生は、下記の環境制約により未検証です。
+
+本番の画面・APIクライアント・表示タブ内の通信処理を接続し、Chromiumの実際のfetch、Web Locks、タブ終了を使用して検証します。APIの応答とChromeのDNR設定APIはテスト用です。Workerが一切応答しない状態でも初期読み込みが完了すること、起動直後の終了と再起動を20回繰り返せること、ロック保持タブの終了で待ちタブが再開することを確認します。保存済みのフレンド／ワールド表示、キャッシュ削除、複数画面、お気に入り登録・移動・戻す・解除、リスト名保存、タブ終了後の429待機共有を対象にします。
+
+通信処理単体では、許可URL、変更経路、ヘッダー設定失敗時の送信禁止、500msの開始間隔、429の2秒待機とRetry-After、5xx、応答本文のタイムアウト、結果不明のPOSTの再送禁止、中止、設定APIの停止を検証します。互換用Worker経路の終了処理・期限も回帰テストに含みます。
+
+実アカウントのデータは変更していません。実際に拡張機能をインストールしたChromeの検証は、実行環境でUnix socket作成が禁止され、ChromeのProcessSingletonが起動できないため未実施です。DNRによる実ヘッダーの適用とライブVRChatでの成功は、この環境では確認できていません。ユーザー環境の元の停止原因をログで特定したとは主張しません。
+
+## 画面とFavoriteの安全性
+
+フレンド選択状態での再起動・キャッシュ削除、認証中の終了、ページ復帰、表示切り替え、404後の復旧、各インスタンスタブを検証します。取得不可ワールドは解除のみ、移動前の公開状態再確認、403/404/429で元の登録を保持、Origin拒否時に再送・全件再取得を増やさないことを確認します。通常版の日英表示とワールド管理、撮影用の画像・全リスト・足跡60件・Favorite率40％・6テーマ・3サイズ・リロードを確認します。
+
+## ページ取得
+
+Favorites（world、vrcPlusWorld、friend）とオンライン／Offlineフレンドはn=100で要求し、実際の応答件数でoffsetを進めます。空ページ、反復ページ、ID重複、中止、安全上限を検査します。足跡は取得不可の行が省かれる場合に備え、50スロット単位を維持します。短い応答だけで終了せず、推測でoffsetを増やしません。
+
+参照資料（2026-10-09確認、コミュニティ管理の仕様）：
+- https://vrchat.community/reference/get-favorites
+- https://vrchat.community/reference/get-friends
+- https://vrchat.community/reference/get-recent-worlds
+
+表示タブからの通信とブラウザによる排他制御の参照資料：
+- https://developer.chrome.com/docs/extensions/develop/concepts/network-requests
+- https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API
+
+## パッケージ
+
+通常版、Chrome Web Store版、撮影版のZIPを生成し、manifestのバージョン、撮影データの分離、ZIPの破損検査、全ファイルのSHA-256を確認します。権限追加はありません。READMEとプライバシーポリシーは現行仕様のみとし、変更履歴はCHANGELOGに集約します。

@@ -17,15 +17,41 @@ export class VrchatApiClient {
   constructor(baseUrl = CONFIG.API_BASE) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.controller = new AbortController();
+    this.reads = new Map();
   }
 
-  abort() { this.controller.abort(); }
+  abort() { this.controller.abort(); this.reads.clear(); }
 
   async fetchJson(path, options = {}) {
+    if (this.controller.signal.aborted) throw abortError();
+    const method = (options.method || 'GET').toUpperCase();
+    if (method !== 'GET') {
+      // Never share mutations, or let their verification join a pre-write GET.
+      this.reads.clear();
+      try { return await this.fetchJsonUnshared(path, options); }
+      finally { this.reads.clear(); }
+    }
+    const url = /^https?:\/\//i.test(path) ? path : `${this.baseUrl}${path}`;
+    const key = JSON.stringify([url, Object.entries(options.headers || {}).sort()]);
+    let task = this.reads.get(key);
+    if (!task) {
+      task = this.fetchJsonUnshared(path, options).finally(() => {
+        if (this.reads.get(key) === task) this.reads.delete(key);
+      });
+      this.reads.set(key, task);
+    }
+    const result = await task;
+    // Each consumer owns its JSON. Keep only the pending request, never a
+    // completed response or a cache shared between accounts/documents.
+    return result === null ? null : JSON.parse(JSON.stringify(result));
+  }
+
+  async fetchJsonUnshared(path, options = {}) {
     const url = /^https?:\/\//i.test(path) ? path : `${this.baseUrl}${path}`;
     const method = (options.method || 'GET').toUpperCase();
     const signal = this.controller.signal;
     let attempt = 0;
+    let transportRetry = false;
     while (true) {
       if (signal.aborted) throw abortError();
       if (method === 'GET') await waitForVisible(signal);
@@ -33,14 +59,26 @@ export class VrchatApiClient {
       try { response = await fetchUsingVrchatSession(url, {
         method, headers: options.headers,
         body: typeof options.body === 'string' ? options.body : undefined,
+        signal,
       }); } catch (error) {
         if (signal.aborted) throw abortError();
+        if (method === 'GET' && !transportRetry && ['RUNTIME_ERROR', 'RUNTIME_TIMEOUT'].includes(error?.code)) {
+          transportRetry = true;
+          await waitUntil(Date.now() + 1000, signal);
+          continue;
+        }
         error.outcomeUnknown = method !== 'GET' && error?.code !== 'INVALID_URL';
         throw error;
       }
       if (signal.aborted) throw abortError();
       if (response.deferred) {
         await waitUntil(Math.max(Date.now() + 25, response.retryAt), signal);
+        continue;
+      }
+      if (method === 'GET' && !transportRetry && response.status === 0
+        && ['TIMEOUT', 'NETWORK_ERROR', 'READ_CANCELLED'].includes(response.code)) {
+        transportRetry = true;
+        await waitUntil(Date.now() + 1000, signal);
         continue;
       }
       if (response.ok) {
@@ -333,6 +371,7 @@ export class DataRepository {
     this.epoch = 0;
     this.disposed = false;
     this.inflight = new Map();
+    this.offlinePages = new Map();
     this.rawApi = api;
     this.api = new Proxy(api, {
       get: (target, name) => typeof target[name] === 'function' ? async (...args) => {
@@ -371,6 +410,7 @@ export class DataRepository {
     this.epoch += 1;
     this.rawApi.abort?.();
     this.inflight.clear();
+    this.offlinePages.clear();
     for (const cache of [this.userDetailCache, this.instanceCache, this.worldCache, this.groupCache]) cache?.dispose();
   }
 
@@ -388,6 +428,7 @@ export class DataRepository {
     this.assertActive();
     this.epoch += 1;
     this.inflight.clear();
+    this.offlinePages.clear();
     for (const cache of [this.userDetailCache, this.instanceCache, this.worldCache, this.groupCache]) cache?.dispose();
     this.currentUserId = userId;
     this.userDetailCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.USER_DETAIL_CACHE_KEY, userId), CONFIG.USER_DETAIL_CACHE_MAX_ENTRIES);
@@ -492,6 +533,14 @@ export class DataRepository {
     return this.worldCache?.get(worldId, CONFIG.WORLD_CACHE_TTL_MS) ?? null;
   }
 
+  cacheWorld(world) {
+    this.requireCurrentUser();
+    if (!/^wrld_[A-Za-z0-9_-]+$/.test(world?.id || '') || typeof world.name !== 'string'
+      || !world.name.trim() || /^[?？]+$/.test(world.name.trim())
+      || /^World Currently Unavailable$/i.test(world.name.trim()) || world.unavailable) return;
+    this.worldCache.set(world.id, slimWorld(world));
+  }
+
   async fetchMe() {
     const user = await this.api.fetchMe();
     if (!user?.id) throw new ApiError(200, 'VRChat account information did not include a user ID');
@@ -542,8 +591,15 @@ export class DataRepository {
     this.requireCurrentUser();
     if (!Number.isInteger(offset) || offset < 0) throw new Error('Invalid friend offset.');
     return this.singleFlight('offlineFriendPage:' + offset, async () => {
+      const cached = this.offlinePages.get(offset);
+      if (cached && Date.now() - cached.at < CONFIG.OFFLINE_PAGE_CACHE_TTL_MS) return cached.rows;
       const rows = await this.api.fetchFriendsPage(offset, true);
       if (!Array.isArray(rows) || rows.some(row => !row || typeof row.id !== 'string' || !row.id.startsWith('usr_') || typeof row.displayName !== 'string' || !row.displayName.trim())) throw new ApiError(200, 'Invalid offline friend list');
+      this.offlinePages.delete(offset);
+      this.offlinePages.set(offset, { at: Date.now(), rows });
+      // Short-lived, bounded memory only. A refresh/account change/dispose
+      // creates a new snapshot and cannot reuse these pages.
+      while (this.offlinePages.size > 100) this.offlinePages.delete(this.offlinePages.keys().next().value);
       return rows;
     });
   }
@@ -774,6 +830,7 @@ export class DataRepository {
     try {
       const raw = await this.api.fetchGroupInstances(userId);
       const items = Array.isArray(raw) ? raw : Array.isArray(raw?.instances) ? raw.instances : [];
+      for (const item of items) if (item?.world) this.cacheWorld(item.world);
       this.groupInstancesCache.set({ userId, items });
       return items;
     } catch (error) {
@@ -829,6 +886,7 @@ export class DataRepository {
     const cached = this.instanceCache.get(location, CONFIG.INSTANCE_CACHE_TTL_MS);
     if (cached !== null) return cached;
     const data = await this.api.fetchInstance(location);
+    if (data?.world?.id === location.split(':')[0]) this.cacheWorld(data.world);
     this.instanceCache.set(location, data);
     return data;
   }

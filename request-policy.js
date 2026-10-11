@@ -1,5 +1,18 @@
 import { CONFIG } from './config.js';
 
+export function withTimeout(promise, milliseconds, onTimeout) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error('Request timed out');
+      error.name = 'TimeoutError';
+      reject(error);
+      onTimeout?.();
+    }, milliseconds);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export function isAllowedApiUrl(value) {
   try {
     const url = new URL(value);
@@ -61,7 +74,8 @@ export class SharedRequestGate {
     this.nextStartAt = 0;
     this.active = 0;
     this.tail = Promise.resolve();
-    this.ready = store.load().then(value => { this.blockedUntil = Math.max(0, Number(value) || 0); });
+    this.ready = withTimeout(Promise.resolve().then(() => store.load()), CONFIG.API_POLICY_TIMEOUT_MS || 3000)
+      .catch(() => 0).then(value => { this.blockedUntil = Math.max(0, Number(value) || 0); });
   }
 
   claim() {
@@ -91,7 +105,8 @@ export class SharedRequestGate {
     await this.ready;
     this.blockedUntil = Math.max(this.blockedUntil, retryAfterDeadline(value, this.now(), fallbackMs), this.now() + minimumMs);
     // Serialize writes so an earlier response cannot overwrite a longer wait.
-    const write = this.tail.then(() => this.store.save(this.blockedUntil));
+    const write = this.tail.then(() => withTimeout(Promise.resolve().then(() => this.store.save(this.blockedUntil)),
+      CONFIG.API_POLICY_TIMEOUT_MS || 3000).catch(() => {}));
     this.tail = write.catch(() => {});
     await write;
     return this.blockedUntil;

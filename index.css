@@ -458,7 +458,7 @@ body.sidebar-collapsed .sidebar-toggle {
   margin: 0 2px;
   background: var(--line-strong);
 }
-.tab {
+:is(.tab, .world-view-tab) {
   height: 32px;
   box-sizing: border-box;
   display: inline-flex;
@@ -470,8 +470,8 @@ body.sidebar-collapsed .sidebar-toggle {
   color: #9fb0bd;
   border-radius: 5px;
 }
-.tab:hover { background: #1f303e; color: #dce8ef; }
-.tab.active { background: rgba(29,161,242,.16); border-color: #2e86b8; color: #6ec8ff; font-weight: 700; }
+:is(.tab, .world-view-tab):hover { background: #1f303e; color: #dce8ef; }
+:is(.tab, .world-view-tab).active { background: rgba(29,161,242,.16); border-color: #2e86b8; color: #6ec8ff; font-weight: 700; }
 .sort {
   width: 176px;
   min-width: 176px;
@@ -1451,7 +1451,7 @@ body::after {
   gap: 6px;
 }
 
-.tab {
+:is(.tab, .world-view-tab) {
   height: 32px;
   display: inline-flex;
   align-items: center;
@@ -1465,13 +1465,13 @@ body::after {
   transition: color .15s ease, border-color .15s ease, background .15s ease, box-shadow .15s ease, transform .15s ease;
 }
 
-.tab:hover {
+:is(.tab, .world-view-tab):hover {
   border-color: rgba(104, 207, 231, .34);
   background: rgba(29, 48, 72, .62);
   color: #dcebf5;
 }
 
-.tab.active {
+:is(.tab, .world-view-tab).active {
   border-color: rgba(97, 223, 236, .56);
   background:
     linear-gradient(105deg, rgba(51, 190, 215, .28), rgba(112, 80, 210, .24)),
@@ -1808,7 +1808,7 @@ body::after {
 }
 
 /* Accessibility: keep keyboard focus obvious without brightening the whole theme. */
-.tab:focus-visible,
+:is(.tab, .world-view-tab):focus-visible,
 .friend-search:focus-visible,
 .friend-filter:focus-visible,
 .sort:focus-visible,
@@ -1961,16 +1961,16 @@ body[data-theme="light"] .toolbar {
   border-bottom-color: #d9dde3;
   box-shadow: 0 1px 0 rgba(0,0,0,.04);
 }
-body[data-theme="light"] .tab {
+body[data-theme="light"] :is(.tab, .world-view-tab) {
   border-color: #c9ced6;
   background: #ffffff;
   color: #5b626b;
 }
-body[data-theme="light"] .tab:hover {
+body[data-theme="light"] :is(.tab, .world-view-tab):hover {
   background: #f0f3f6;
   color: #25292f;
 }
-body[data-theme="light"] .tab.active {
+body[data-theme="light"] :is(.tab, .world-view-tab).active {
   background: #e5f4fb;
   border-color: #75bad8;
   color: #15769f;
@@ -2245,16 +2245,16 @@ body[data-theme="ash"] .toolbar {
   border-bottom-color: #41434a;
   box-shadow: 0 1px 0 rgba(0,0,0,.16);
 }
-body[data-theme="ash"] .tab {
+body[data-theme="ash"] :is(.tab, .world-view-tab) {
   border-color: #5c6068;
   background: #383a40;
   color: #dbdee1;
 }
-body[data-theme="ash"] .tab:hover {
+body[data-theme="ash"] :is(.tab, .world-view-tab):hover {
   background: #404249;
   color: #ffffff;
 }
-body[data-theme="ash"] .tab.active {
+body[data-theme="ash"] :is(.tab, .world-view-tab).active {
   background: #4e5058;
   border-color: #5865f2;
   color: #ffffff;
@@ -2528,16 +2528,16 @@ body[data-theme="dark"] .toolbar {
   border-bottom-color: #2e3035;
   box-shadow: 0 1px 0 rgba(0,0,0,.25);
 }
-body[data-theme="dark"] .tab {
+body[data-theme="dark"] :is(.tab, .world-view-tab) {
   border-color: #3f4147;
   background: #1e1f22;
   color: #b5bac1;
 }
-body[data-theme="dark"] .tab:hover {
+body[data-theme="dark"] :is(.tab, .world-view-tab):hover {
   background: #2b2d31;
   color: #f2f3f5;
 }
-body[data-theme="dark"] .tab.active {
+body[data-theme="dark"] :is(.tab, .world-view-tab).active {
   background: #35373c;
   border-color: #5865f2;
   color: #ffffff;
@@ -4103,7 +4103,7 @@ body.sidebar-location-mode .friend-sidebar-location-status {
   flex: 0 0 auto;
   overflow: hidden;
   border: 1px solid rgba(142, 180, 224, .20);
-  border-radius: 7px;
+  border-radius: 6px;
   background: rgba(5, 11, 21, .42);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
 }
@@ -4237,22 +4237,22 @@ body[data-theme="dark"] .tabs .instance-tab-segment > .instance-view-tab {
    Match the compact segmented instance tabs: keep the active fill/text,
    but remove the external cyan/blue highlight around the standalone button.
    ========================================================= */
-.tabs > .friend-view-tab.active {
+:is(.tabs > .friend-view-tab, .world-view-tab).active {
   border-color: rgba(142, 180, 224, .20);
   box-shadow: inset 0 0 0 1px rgba(80, 201, 235, .12);
 }
 
-body[data-theme="light"] .tabs > .friend-view-tab.active {
+body[data-theme="light"] :is(.tabs > .friend-view-tab, .world-view-tab).active {
   border-color: rgba(80, 100, 120, .24);
   box-shadow: inset 0 0 0 1px rgba(21, 118, 159, .08);
 }
 
-body[data-theme="ash"] .tabs > .friend-view-tab.active {
+body[data-theme="ash"] :is(.tabs > .friend-view-tab, .world-view-tab).active {
   border-color: #44474e;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.035);
 }
 
-body[data-theme="dark"] .tabs > .friend-view-tab.active {
+body[data-theme="dark"] :is(.tabs > .friend-view-tab, .world-view-tab).active {
   border-color: #303238;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.025);
 }
@@ -4273,7 +4273,7 @@ body[data-theme="dark"] .tabs > .friend-view-tab.active {
 /* Private is low priority; its users are rendered only when expanded. */
 .private-instance-section { grid-column: 1 / -1; }
 .private-instance-section .private-label { display: none; }
-.private-instance-section .private-card { border: 0; }
+.private-instance-section .private-card { border: 0; grid-template-columns: minmax(0, 1fr); }
 img[data-image-src]:not([src]) { visibility: hidden; }
 
 /* Favorite List name editor */
@@ -4338,7 +4338,7 @@ body[data-theme="light"] .favorite-group-editor-error { color: #b42318; }
 .toolbar-left { flex: 1 1 520px; flex-wrap: wrap; min-width: 0; }
 .toolbar-options { flex: 0 0 auto; margin-left: auto; }
 .tabs { max-width: 100%; flex-wrap: wrap; }
-.instance-tab-segment { max-width: 100%; height: auto; flex-wrap: wrap; overflow: visible; }
+.instance-tab-segment { max-width: 100%; height: 32px; flex-wrap: nowrap; overflow: hidden; }
 .tabs .instance-tab-segment > .instance-view-tab { flex: 0 0 auto; }
 .sort { flex: 0 0 auto; width: auto; min-width: 176px; max-width: 100%; }
 .updated-at { flex: 0 0 auto; overflow: visible; text-overflow: clip; white-space: nowrap; }
@@ -4388,7 +4388,7 @@ body[data-instance-display="simple"] .card .thumb-wrap + .invite-me-button-simpl
 .sort { min-width: 100px; }
 .reload-button, .recent-button { width: 30px; height: 30px; padding: 0; font-size: 20px; line-height: 1; flex-shrink: 0; }
 .recent-button { font-size: 17px; }
-/* World management keeps aria-pressed state without a persistent toolbar highlight. */
+/* World management shares the toolbar tab selection styles and aria-pressed state. */
 .recent-worlds { width: 100%; min-width: 0; }
 .recent-worlds h2 { font-size: 16px; margin: 4px 0 12px; }
 .recent-notice { font-size: 12px; margin-bottom: 12px; }
@@ -4427,6 +4427,7 @@ body[data-instance-size="large"] {--world-card-min:280px;--world-title-size:15px
 .recent-globe-icon {width:18px;height:18px;display:block;}
 .world-favorite-button.favorite-badge {width:24px;height:18px;font-size:10px;line-height:18px;border-radius:9px;}
 .world-favorite-button.favorite-badge:not(.is-favorite) {width:18px;}
+.world-favorite-button.favorite-badge.is-pending {background:#626b75;color:#fff;box-shadow:0 0 0 1px rgba(184,199,214,.5);}
 
 .recent-worlds {padding:0 10px 12px;box-sizing:border-box;}
 .world-copy,.world-list-heading button {display:inline-flex;align-items:center;justify-content:center;}
@@ -4605,16 +4606,16 @@ body[data-theme="sand"] .toolbar {
   border-bottom-color: #e8dfd4;
   box-shadow: 0 1px 0 rgba(0,0,0,.04);
 }
-body[data-theme="sand"] .tab {
+body[data-theme="sand"] :is(.tab, .world-view-tab) {
   border-color: #d6d0c9;
   background: #ffffff;
   color: #716555;
 }
-body[data-theme="sand"] .tab:hover {
+body[data-theme="sand"] :is(.tab, .world-view-tab):hover {
   background: #f7f4ef;
   color: #302b24;
 }
-body[data-theme="sand"] .tab.active {
+body[data-theme="sand"] :is(.tab, .world-view-tab).active {
   background: #f6f0ea;
   border-color: #caa683;
   color: #7e5a36;
@@ -4875,7 +4876,7 @@ body[data-theme="sand"] .instance-tab-segment {
 body[data-theme="sand"] .tabs .instance-tab-segment > .instance-view-tab {
   border-right-color: rgba(80, 100, 120, .20);
 }
-body[data-theme="sand"] .tabs > .friend-view-tab.active {
+body[data-theme="sand"] :is(.tabs > .friend-view-tab, .world-view-tab).active {
   border-color: rgba(80, 100, 120, .24);
   box-shadow: inset 0 0 0 1px rgba(21, 118, 159, .08);
 }
@@ -5040,16 +5041,16 @@ body[data-theme="mist"] .toolbar {
   border-bottom-color: #dddddd;
   box-shadow: 0 1px 0 rgba(0,0,0,.04);
 }
-body[data-theme="mist"] .tab {
+body[data-theme="mist"] :is(.tab, .world-view-tab) {
   border-color: #cfcfcf;
   background: #ffffff;
   color: #626262;
 }
-body[data-theme="mist"] .tab:hover {
+body[data-theme="mist"] :is(.tab, .world-view-tab):hover {
   background: #f3f3f3;
   color: #292929;
 }
-body[data-theme="mist"] .tab.active {
+body[data-theme="mist"] :is(.tab, .world-view-tab).active {
   background: #efefef;
   border-color: #a3a3a3;
   color: #565656;
@@ -5310,7 +5311,7 @@ body[data-theme="mist"] .instance-tab-segment {
 body[data-theme="mist"] .tabs .instance-tab-segment > .instance-view-tab {
   border-right-color: rgba(80, 100, 120, .20);
 }
-body[data-theme="mist"] .tabs > .friend-view-tab.active {
+body[data-theme="mist"] :is(.tabs > .friend-view-tab, .world-view-tab).active {
   border-color: rgba(80, 100, 120, .24);
   box-shadow: inset 0 0 0 1px rgba(21, 118, 159, .08);
 }
@@ -5364,3 +5365,18 @@ body[data-theme="mist"] .world-tabs button[aria-selected="true"] {background:#d4
  .theme-settings .theme-control {gap:4px;}
  .theme-settings .theme-button {width:24px;min-width:24px;height:24px;min-height:24px;flex-basis:24px;}
 }
+
+/* Keep world list navigation visible inside the right pane's scroll area. */
+.world-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  background: var(--bg);
+  padding-top: 6px;
+  padding-bottom: 10px;
+  box-shadow: 0 1px 0 var(--line);
+  scroll-padding-inline: 6px;
+}
+
+/* Align world navigation with the top of the scroll pane, including when sticky. */
+.instance-list.world-view { padding-top: 0; }

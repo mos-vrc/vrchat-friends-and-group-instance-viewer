@@ -126,6 +126,7 @@ const state = {
   favoriteUndo: null,
   friendIndex: new Map(),
   instances: [],
+  initialWorldPreviews: new Set(),
   loading: false,
   loadFailed: false,
   groupLoadFailed: false,
@@ -789,7 +790,7 @@ function displayImageUrl(rawUrl, kind = 'avatar') {
 
 const imagePool = new ImagePool({ fallbackFor: url => imageFallbacks.get(url) || '', concurrency: CONFIG.IMAGE_CONCURRENCY,
   timeoutMs: CONFIG.IMAGE_TIMEOUT_MS, minIntervalMs: CONFIG.IMAGE_MIN_INTERVAL_MS });
-const imageController = new ImageController(imagePool);
+const imageController = new ImageController(imagePool, document.body, {preloadPx:CONFIG.IMAGE_PRELOAD_PX});
 
 function friendAvatarUrl(friend) {
   return displayImageUrl(
@@ -987,7 +988,16 @@ function setActiveTab(tab, { resetScroll = true } = {}) {
   render({ resetScroll });
 }
 
-async function loadRecentWorlds({ force = false } = {}) {
+async function loadRecentWorlds(options = {}) {
+  const recent = state.recent;
+  if (recent.inflight) return recent.inflight;
+  const task = loadRecentWorldsUnshared(options);
+  recent.inflight = task;
+  try { return await task; }
+  finally { if (recent.inflight === task) recent.inflight = null; }
+}
+
+async function loadRecentWorldsUnshared({ force = false } = {}) {
   if (!state.user || state.loading || state.favoriteMutationPending) return;
   const recent = state.recent;
   if (recent.loading || (recent.ready && !force)) return;
@@ -997,9 +1007,22 @@ async function loadRecentWorlds({ force = false } = {}) {
   recent.account = account; recent.loading = true; recent.error = null;
   if (state.viewMode === VIEW_MODES.RECENT) render();
   try {
-    const rows = await fetchRecentWorlds(api);
+    const rows = await fetchRecentWorlds(api, {
+      shouldContinue:()=>current() && state.viewMode===VIEW_MODES.RECENT && worldView.selected==='recent',
+      onProgress:rows=>{
+        if(!current())return;
+        recent.rows=rows;
+        worldCatalog.seed(rows);
+        for(const world of rows)repository.cacheWorld(world);
+        if(state.viewMode===VIEW_MODES.RECENT && worldView.selected==='recent')render({resetScroll:false});
+      },
+    });
     if (!current()) return;
     recent.rows = rows; recent.ready = true;
+    // Recent already supplies complete world metadata. Reuse it for list
+    // display, and prime only the existing slim instance-display cache.
+    worldCatalog.seed(rows);
+    for (const world of rows) repository.cacheWorld(world);
   } catch (error) {
     if (!current() || error?.name === 'AbortError') return;
     if (error?.status === 401) { handleSessionExpired(); return; }
@@ -1021,30 +1044,49 @@ async function loadWorldView({force=false}={}) {
   const view=worldView, store=worldFavorites, catalog=worldCatalog, api=repository.api;
   const generation=state.loadGeneration, account=state.user.id, token=++view.token;
   const current=()=>view===worldView && token===view.token && generation===state.loadGeneration && state.user?.id===account && store===worldFavorites;
-  view.loading=true; view.error=null; render();
+  view.loading=view.selected!=='recent'; view.error=null;
+  if(force && store)store.ready=false;
+  render();
   try {
-    if(store){
-      try{await store.load(force)}catch(error){
-        if(view.selected!=='recent' || error?.status===401 || error?.name==='AbortError')throw error;
-        // Recent remains usable if the independent Favorite metadata read fails.
-      }
-    }
-    if(!current())return;
     if(view.selected==='recent'){
-      view.loading=false;
+      // Finish the Recent read first; Favorite membership is independent and
+      // may require many pages. Its pending badges never block Recent cards.
       await loadRecentWorlds({force});
+      if(!current() || state.viewMode!==VIEW_MODES.RECENT || view.selected!=='recent')return;
+      if(store){const task=store.load(force);paintWorldProgress();await task}
       return;
     }
-    if(!store?.groups.some(g=>g.key===view.selected)){view.selected='recent';view.loading=false;await loadRecentWorlds({force});return}
+    let group=store?.groups.find(g=>g.key===view.selected), groupResponse=null;
+    const foreground=()=>current() && state.viewMode===VIEW_MODES.RECENT;
+    if(group && (force || !store.ready || Date.now()-store.updatedAt>=300000)){
+      store.ready=false;
+      try { groupResponse=await store.loadSelected(group,foreground); }
+      catch(error){
+        // An unsupported or partial selected-list response needs the complete
+        // membership snapshot. Auth/rate-limit/transient failures never fan out.
+        if(!error.selectedListUnsupported && ![400,403,404,405,501].includes(error?.status))throw error;
+        await store.load(force);
+      }
+    } else if(store)await store.load(force);
+    if(!foreground())return;
+    group=store?.groups.find(g=>g.key===view.selected);
+    if(!group){view.selected='recent';view.loading=false;await loadRecentWorlds({force});return}
     let paintQueued=false;
     const onProgress=()=>{
-      if(!current() || state.viewMode!==VIEW_MODES.RECENT || paintQueued)return;
+      if(!foreground() || paintQueued)return;
       paintQueued=true;
-      requestAnimationFrame(()=>{paintQueued=false;if(current() && state.viewMode===VIEW_MODES.RECENT)paintWorldProgress()});
+      requestAnimationFrame(()=>{paintQueued=false;if(foreground())paintWorldProgress()});
     };
-    await catalog.load(store.members(view.selected),api,{force,group:store.groups.find(g=>g.key===view.selected),
+    paintWorldProgress();
+    await catalog.load(store.members(view.selected),api,{force,group,groupResponse,
       current:()=>catalog===worldCatalog && generation===state.loadGeneration && state.user?.id===account,
-      shouldContinue:()=>current() && state.viewMode===VIEW_MODES.RECENT,onProgress});
+      onWorld:world=>repository.cacheWorld(world),
+      shouldContinue:foreground,onProgress});
+    if(!foreground())return;
+    // The chosen list is now browsable. Verify all memberships afterwards;
+    // Favorite editing stays disabled until that complete snapshot succeeds.
+    view.loading=false;paintWorldProgress();
+    if(!store.ready){const task=store.load(force);paintWorldProgress();await task}
   }catch(error){
     if(!current() || error?.name==='AbortError')return;
     if(error?.status===401){handleSessionExpired();return}
@@ -1060,10 +1102,10 @@ function paintWorldProgress(){
 function renderRecentWorlds() {
   const recent=state.recent, groups=worldFavorites?.groups||[], selected=worldView.selected;
   const group=groups.find(g=>g.key===selected), isRecent=selected==='recent';
-  const rows=isRecent?recent.rows:(worldFavorites?.members(selected)||[]).map(id=>worldCatalog.worlds.get(id)||{id,pending:worldView.loading,unavailable:!worldView.loading});
-  const notice=worldView.loading?t('ワールドを読み込み中…'):worldView.error?readFailureMessage('worlds',worldView.error)
-    :isRecent?(recent.loading?t('訪問ワールドを読み込み中…'):recent.error?readFailureMessage('recent',recent.error):recent.ready&&!rows.length?t('最近訪問したワールドはありません。'):'')
-    :!rows.length?t('このリストにはワールドがありません。'):'';
+  const rows=isRecent?recent.rows:(worldFavorites?.members(selected)||[]).map(id=>worldCatalog.worlds.get(id)||{id,pending:worldView.loading,loadFailed:!worldView.loading&&Boolean(worldView.error),unavailable:!worldView.loading&&!worldView.error});
+  const notice=worldView.loading?t('ワールドを読み込み中…'):worldView.error?readFailureMessage(isRecent?'worldFavorites':'worlds',worldView.error)
+    :isRecent?(recent.loading?t('訪問ワールドを読み込み中…'):recent.error?readFailureMessage('recent',recent.error):worldFavorites?.inflight?t('ワールドFavoriteを確認中…'):recent.ready&&!rows.length?t('最近訪問したワールドはありません。'):'')
+    :worldFavorites?.inflight?t('ワールドFavoriteを確認中…'):!rows.length?t('このリストにはワールドがありません。'):'';
   const editor=worldView.editor;
   const edit=editor&&editor.key===selected?`<form class="world-list-editor" data-world-list-editor aria-busy="${editor.saving}"><label>${escapeHtml(t('リスト名'))} <input class="world-list-name" maxlength="20" value="${escapeHtml(editor.draft)}"${editor.saving?' disabled':''}></label><span class="world-name-count">${editor.draft.length} / 20</span><button type="submit"${editor.saving||editor.unknown?' disabled':''}>${escapeHtml(t('保存'))}</button><button type="button" data-world-edit-cancel${editor.saving?' disabled':''}>${escapeHtml(t('キャンセル'))}</button><div role="status">${escapeHtml(editor.saving?t('リスト名を保存しています(少し時間が掛かります)…'):editor.error?t(editor.error):'')}</div></form>`:'';
   return `<section class="recent-worlds" aria-label="${escapeHtml(t('ワールド管理'))}"><div class="world-tabs" role="tablist" aria-label="${escapeHtml(t('ワールドリスト'))}">
@@ -1071,7 +1113,7 @@ function renderRecentWorlds() {
     ${group?`<div class="world-list-heading"><h2>${escapeHtml(group.label)}</h2><button type="button" data-world-edit title="${escapeHtml(t('リスト名を変更'))}" aria-label="${escapeHtml(t('リスト名を変更'))}"${state.favoriteMutationPending?' disabled':''}><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m4 13 9-9 3 3-9 9-4 1zM11 6l3 3"/></svg></button></div>`:`<h2>${escapeHtml(t('足跡'))}</h2>`}${edit}
     <div class="recent-notice" role="status">${escapeHtml(notice)}</div><div class="recent-world-grid">${rows.map(world=>{
       const unavailable=worldIsUnavailable(world);
-      const thumb=unavailable?'':displayImageUrl(world.thumbnailImageUrl||world.imageUrl||'','world'), platforms=unavailable?null:worldPlatforms(world), name=unavailable?t('情報取得不可'):world.name||t('ワールド情報を取得中…');
+      const thumb=unavailable?'':displayImageUrl(world.thumbnailImageUrl||world.imageUrl||'','world'), platforms=unavailable?null:worldPlatforms(world), name=unavailable?t('情報取得不可'):world.loadFailed?t('読み込み失敗'):world.name||t('ワールド情報を取得中…');
       const placeholder=unavailable?`<div class="thumb thumb-placeholder world-unavailable"><span class="world-unavailable-icon" aria-hidden="true">⌕</span><span>World Currently<br>Unavailable</span></div>`:'<div class="thumb thumb-placeholder"></div>';
       return `<article class="recent-world-card" data-world-id="${escapeHtml(world.id)}"><div class="thumb-wrap has-world-favorite"><a class="world-page-link" href="${escapeHtml(buildWorldUrl({worldId:world.id}))}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(t('ワールドページを開く'))}">${thumb?`<img class="thumb" data-image-src="${escapeHtml(thumb)}" alt="" loading="eager" decoding="async">`:placeholder}</a>${renderWorldFavoriteButton(world.id)}</div>
       <div class="recent-world-name">${escapeHtml(name)}</div><div class="recent-world-author">${escapeHtml(unavailable||world.pending?world.id:world.authorName||t('作者不明'))}</div><div class="world-card-actions"><span class="world-platforms" title="${escapeHtml(t('対応環境'))}">${escapeHtml(platforms?.length?platforms.join(' / '):t('対応環境不明'))}</span><button type="button" class="world-copy" data-copy-url="${escapeHtml(buildWorldUrl({worldId:world.id}))}" title="${escapeHtml(t('ワールドURLをコピー'))}" aria-label="${escapeHtml(t('ワールドURLをコピー'))}"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="6" width="11" height="11" rx="1.5"/><path d="M13 6V3H3v10h3"/></svg></button></div></article>`;
@@ -1647,7 +1689,7 @@ function getCurrentInstanceEntry(location, fallback = null) {
 }
 
 function needsHydration(entry) {
-  if (state.loading || !entry || entry.debug || entry.permission === PERMISSIONS.PRIVATE) return false;
+  if (repository.disposed || state.loading || !entry || entry.debug || entry.permission === PERMISSIONS.PRIVATE) return false;
 
   // A failed Instance request must become a terminal state for the current
   // render. Without this guard, `!entry.instanceData` remained true after a
@@ -1723,7 +1765,7 @@ function replaceCardInDom(entry) {
 }
 
 async function hydrateInstance(location, fallbackEntry) {
-  if (!location) return;
+  if (!location || repository.disposed) return;
   const dataRepository = repository;
   const generation = state.loadGeneration;
   const current = () => generation === state.loadGeneration && !dataRepository.disposed;
@@ -1731,6 +1773,33 @@ async function hydrateInstance(location, fallbackEntry) {
   if (!currentEntry || currentEntry.permission === PERMISSIONS.PRIVATE) return;
 
   try {
+    // Spend a bounded cold-start budget on visible world previews. Distant
+    // cards keep Instance-first reads so inline world metadata saves requests.
+    if(!currentEntry.world && !currentEntry.worldFetchFailed && !currentEntry.instanceData){
+      const bounds=elements.list.getBoundingClientRect();
+      const visible=[...elements.list.querySelectorAll('[data-location]')].some(card=>{
+        if(card.dataset.location!==location)return false;
+        const rect=card.getBoundingClientRect();return rect.bottom>bounds.top && rect.top<bounds.bottom;
+      });
+      if(visible && !state.initialWorldPreviews.has(currentEntry.worldId)
+        && state.initialWorldPreviews.size<CONFIG.INITIAL_WORLD_PREVIEW_COUNT){
+        state.initialWorldPreviews.add(currentEntry.worldId);
+        try {
+          const world=await dataRepository.fetchWorld(currentEntry.worldId);
+          if(!current())return;
+          currentEntry=getCurrentInstanceEntry(location,currentEntry);
+          if(world){currentEntry.world=world;currentEntry.worldFetchFailed=false;replaceCardInDom(currentEntry);}
+          else currentEntry.worldFetchFailed=true;
+        } catch(error){
+          if(!current() || error?.name==='AbortError')return;
+          if(error?.status===401){handleSessionExpired();return;}
+          // Do not retry this same world again in the Instance-first phase.
+          // Inline world metadata from the Instance can still restore its display.
+          currentEntry=getCurrentInstanceEntry(location,currentEntry);
+          currentEntry.worldFetchFailed=true;
+        }
+      }
+    }
     let data = currentEntry.instanceData;
     if (!data) {
       try {
@@ -1751,6 +1820,7 @@ async function hydrateInstance(location, fallbackEntry) {
     const changed = !currentEntry.instanceData || currentEntry.instanceData !== data;
     currentEntry.instanceFetchFailed = false;
     mergeInstanceData(currentEntry, data);
+    if(currentEntry.world)currentEntry.worldFetchFailed=false;
 
     if (!currentEntry.world && !currentEntry.worldFetchFailed
       && currentEntry.worldId && currentEntry.worldId !== 'offline' && currentEntry.worldId !== 'private') {
@@ -1772,6 +1842,10 @@ async function hydrateInstance(location, fallbackEntry) {
       }
     }
 
+    // Publish the world and participant information before an optional owner
+    // lookup; a slow owner request must not hold the thumbnail back.
+    replaceCardInDom(currentEntry);
+    startPendingGroupRefresh();
     if (needsNonFriendOwnerProfile(currentEntry, friendMap(), ownerDisplayState())) {
       const ownerId = instanceOwnerId(currentEntry);
       const ownerUser = await dataRepository.fetchUser(ownerId);
@@ -1786,6 +1860,8 @@ async function hydrateInstance(location, fallbackEntry) {
     if (!current() || error?.name === 'AbortError') return;
     if (error?.status === 401) { handleSessionExpired(); return; }
     console.warn('Could not hydrate instance:', location, error);
+  } finally {
+    if (current()) startPendingGroupRefresh();
   }
 }
 
@@ -2313,23 +2389,12 @@ function initializeDemoWorldFavorites(instances) {
 }
 function renderWorldFavoriteButton(worldId) {
   if (!/^wrld_[A-Za-z0-9_-]+$/.test(worldId || '')) return '';
-  const active = Boolean(worldFavorites?.records.get(worldId)?.length);
+  const pending = !worldFavorites?.ready;
+  const active = !pending && Boolean(worldFavorites?.records.get(worldId)?.length);
   const label = worldFavorites?.ready
     ? t(active ? 'ワールドFavoriteを変更' : 'ワールドをFavoriteに登録')
-    : t('ワールドFavoriteを確認');
-  return `<button type="button" class="world-favorite-button favorite-badge${active ? ' is-favorite' : ''}" data-world-favorite-id="${escapeHtml(worldId)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${state.favoriteMutationPending || state.loading ? ' disabled' : ''}><span aria-hidden="true">${active ? `★${worldFavorites.number(worldId)||1}` : ''}</span></button>`;
-}
-async function refreshWorldFavorites(generation, store, force=false) {
-  if (!store || CONFIG.DEBUG_MODE || CONFIG.SCREENSHOT_MODE) return;
-  try {
-    await store.load(force);
-    if (generation !== state.loadGeneration || store !== worldFavorites) return;
-    render({ resetScroll:false });
-  } catch (error) {
-    if (generation !== state.loadGeneration || error?.name === 'AbortError') return;
-    if (error?.status === 401) { handleSessionExpired(); return; }
-    console.warn('Could not read world Favorites:', error);
-  }
+    : t('ワールドFavoriteを確認中…');
+  return `<button type="button" class="world-favorite-button favorite-badge${pending ? ' is-pending' : active ? ' is-favorite' : ''}" data-world-favorite-id="${escapeHtml(worldId)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${pending ? ' aria-busy="true"' : ''}${pending || state.favoriteMutationPending || state.loading ? ' disabled' : ''}><span aria-hidden="true">${pending ? '…' : active ? `★${worldFavorites.number(worldId)||1}` : ''}</span></button>`;
 }
 function unavailableFavoriteWorld(worldId) {
   const world=worldCatalog.worlds.get(worldId) || state.recent.rows.find(w=>w.id===worldId);
@@ -2476,9 +2541,51 @@ function onFavoriteUiClick(event) {
   }
 }
 
+let pendingGroupRefresh = null;
+
+function startPendingGroupRefresh() {
+  const pending = pendingGroupRefresh;
+  if (!pending) return;
+  const {userId, dataRepository, generation} = pending;
+  if (generation !== state.loadGeneration || dataRepository.disposed) {
+    pendingGroupRefresh = null;
+    return;
+  }
+  if (state.loading || document.hidden || state.viewMode === VIEW_MODES.RECENT) return;
+  // The Group tab needs its own primary list immediately. Other views first
+  // finish the visible cards, not the entire preload queue or optional Owner.
+  if (!(state.viewMode === VIEW_MODES.INSTANCES && state.tab === TABS.GROUPS)) {
+    const bounds = elements.list.getBoundingClientRect();
+    const locations = new Set([...elements.list.querySelectorAll('.card[data-location], .friend-location-item[data-location]')]
+      .filter(card => {
+        const rect = card.getBoundingClientRect();
+        return rect.height > 0 && rect.bottom > bounds.top && rect.top < bounds.bottom;
+      }).map(card => card.dataset.location));
+    const unfinished = state.instances.some(entry => locations.has(entry.location)
+      && entry.permission !== PERMISSIONS.PRIVATE
+      && ((!entry.instanceData && !entry.instanceFetchFailed)
+        || (entry.instanceData && !entry.world && !entry.worldFetchFailed)));
+    if (unfinished) return;
+  }
+  pendingGroupRefresh = null;
+  void refreshGroupDataInBackground(userId, dataRepository, generation).catch(error => {
+    if (generation === state.loadGeneration && !dataRepository.disposed && error?.status === 401) handleSessionExpired();
+  });
+}
+
 const hydrationController = new InstanceHydrationController({
   root: elements.list,
   getEntries: () => state.instances,
+  getSupplementalLocations: () => {
+    if (state.sidebarMode !== 'location' || !elements.friendList) return [];
+    const bounds = elements.friendList.getBoundingClientRect();
+    const preload = Math.min(CONFIG.HYDRATE_PRELOAD_PX, 320);
+    return [...elements.friendList.querySelectorAll('.friend-item[data-location]')]
+      .filter(card => {
+        const rect = card.getBoundingClientRect();
+        return rect.height > 0 && rect.bottom >= bounds.top - preload && rect.top <= bounds.bottom + preload;
+      }).map(card => card.dataset.location).filter(Boolean);
+  },
   needsHydration,
   hydrate: hydrateInstance,
   concurrency: CONFIG.HYDRATE_CONCURRENCY,
@@ -2495,10 +2602,11 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   hydrationController.disconnect();
 
   updateTabButtons();
+  elements.list.classList.toggle('world-view', state.viewMode === VIEW_MODES.RECENT);
   renderFriendSidebar();
 
   const manifest = globalThis.chrome?.runtime?.getManifest?.();
-  const appVersion = manifest?.version_name || manifest?.version || '1.6.4.3';
+  const appVersion = manifest?.version_name || manifest?.version || '1.6.4.21';
   const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
   if (state.viewMode === VIEW_MODES.RECENT) {
     patchMarkup(elements.list, `${renderRecentWorlds()}${credit}`);
@@ -2515,7 +2623,13 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
 
   elements.friendList.scrollTop = friendScroll;
   elements.list.scrollTop = rightScroll;
-  if (state.viewMode === VIEW_MODES.RECENT) return;
+  startPendingGroupRefresh();
+  if (state.viewMode === VIEW_MODES.RECENT) {
+    // Stop unstarted instance work from the previous view. The visible left
+    // location pane can still use the shared hydration queue.
+    hydrationController.sync();
+    return;
+  }
   hydrationController.sync({
     mode: hydrationMode,
     priorityLocations: priorityLocation ? [priorityLocation] : [],
@@ -2668,21 +2782,6 @@ async function refreshGroupDataInBackground(userId, dataRepository, generation) 
     console.warn('Could not refresh group instances:', error);
   }
 }
-
-async function ensureApiUserAgentRule() {
-  if (!globalThis.chrome?.runtime?.sendMessage) return false;
-  try {
-    const response = await chrome.runtime.sendMessage({ type: 'ENSURE_API_USER_AGENT_RULE' });
-    return Boolean(response?.installed);
-  } catch {
-    // User-Agent identification is important for VRChat API usage, but a
-    // browser/runtime that cannot register the rule should not make the UI
-    // itself unusable. The API request path remains otherwise unchanged.
-    return false;
-  }
-}
-
-
 
 function createDebugData() {
   const count = Math.max(1, Math.floor(Number(CONFIG.DEBUG_FRIEND_COUNT) || 20));
@@ -2847,6 +2946,7 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
   repository = new DataRepository(new VrchatApiClient(), uiStorage);
   const dataRepository = repository;
   const generation = ++state.loadGeneration;
+  state.initialWorldPreviews.clear();
   const current = () => generation === state.loadGeneration && !dataRepository.disposed;
   hydrationController.reset();
   state.recent.token += 1; state.recent.loading = false; worldView.token++; worldView.loading=false;
@@ -2875,9 +2975,9 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     const previousWorlds = worldFavorites;
     state.recent.token += 1; state.recent.loading = false; worldView.token++; worldView.loading=false;
     state.user = user;
-    worldFavorites = new WorldFavorites(dataRepository.api);
+    worldFavorites = new WorldFavorites(dataRepository.api, user);
     worldFavorites.account = user.id;
-    if (previousWorlds?.account === user.id) {
+    if (previousWorlds?.account === user.id && previousWorlds.hasVrcPlus === worldFavorites.hasVrcPlus) {
       worldFavorites.groups = previousWorlds.groups; worldFavorites.records = previousWorlds.records;
       worldFavorites.ready = previousWorlds.ready; worldFavorites.updatedAt = previousWorlds.updatedAt;
     }
@@ -2896,7 +2996,9 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     state.onlineFriends = normalizeFriends(friends);
     state.offlineProfiles.clear();
     applyFavoriteState(favoriteState);
-    void refreshWorldFavorites(generation, worldFavorites, ['manual', 'cache'].includes(reason));
+    // World Favorites are used only in World management. Keep initial
+    // instance hydration ahead of those potentially large list reads.
+    if (state.viewMode !== VIEW_MODES.RECENT) worldFavorites.ready = false;
     state.instances = buildLocations(
       createFriendLocationMap(state.friends),
       [],
@@ -2909,7 +3011,7 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     state.dataFromCache = Boolean(dataRepository.usedStaleFallback);
     state.loading = false;
     render();
-    if (state.viewMode === VIEW_MODES.RECENT && reason !== 'automatic') void loadWorldView();
+    if (state.viewMode === VIEW_MODES.RECENT) void loadWorldView({ force: reason !== 'initial' });
     updateLoadedAtLabel();
     setStatus('');
     if (notify) {
@@ -2919,12 +3021,11 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
 
     void loadOfflineFriendProfiles();
 
-    // Group Instances are secondary data for this screen. Load them after the
-    // first interactive paint so tab switching and friend clicks remain
-    // responsive even while group data is being fetched.
-    void refreshGroupDataInBackground(user.id, dataRepository, generation).catch((error) => {
-      if (current() && error?.status === 401) handleSessionExpired();
-    });
+    // Defer secondary Group reads until the actual visible instance details
+    // have settled. Render/hydration/visibility changes wake this once, without
+    // a timer, and World management does not start unrelated Group traffic.
+    pendingGroupRefresh = {userId: user.id, dataRepository, generation};
+    startPendingGroupRefresh();
   } catch (error) {
     if (!current() || error?.name === 'AbortError') return;
     if (error?.status === 401) handleSessionExpired();
@@ -3250,7 +3351,23 @@ window.addEventListener('storage', event => {
   setStatus('');
   showActionToast(t('別の画面でキャッシュが削除されました。「更新」で最新情報を取得してください。'), { delay: 8000 });
 });
-window.addEventListener('pagehide', () => { uiStorage.flush(); repository.dispose(); imagePool.clear(); });
+window.addEventListener('pagehide', () => {
+  // Invalidate hydration callbacks before aborting their requests. A closing
+  // document may still be visible while its abort reactions run.
+  hydrationController.stop();
+  disconnectSidebarHydrationObserver();
+  uiStorage.flush();
+  state.loadGeneration += 1;
+  repository.dispose();
+  imagePool.clear();
+  clearAutoRefreshTimer();
+  state.loading = false;
+  state.favoriteMutationPending = false;
+  state.pendingInvites.clear();
+  closeFavoriteMenu();
+  state.recent.token += 1; state.recent.loading = false;
+  worldView.token++; worldView.loading = false;
+});
 window.addEventListener('pageshow', event => { if (event.persisted) { imageController.reset(); void load({ reason: 'restore' }); } });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
@@ -3267,6 +3384,7 @@ document.addEventListener('visibilitychange', () => {
     if (!state.loading && !repository.disposed) {
       hydrationController.sync();
       syncSidebarHydration();
+      startPendingGroupRefresh();
       void loadOfflineFriendProfiles();
     }
   }
@@ -3296,5 +3414,4 @@ persistUiPreferences();
 applyMainSortOptions();
 updateTabButtons();
 scheduleAutoRefresh();
-if (!CONFIG.DEBUG_MODE) void ensureApiUserAgentRule();
 void load();

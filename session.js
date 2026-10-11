@@ -1,15 +1,18 @@
-import { isAllowedApiUrl } from './request-policy.js';
+import { isAllowedApiUrl, abortError, withTimeout } from './request-policy.js';
+import { CONFIG } from './config.js';
+import { fetchInViewer } from './native-session.js';
 /**
  * Access VRChat through the browser's existing vrchat.com login session without
  * reading the auth cookie value in extension JavaScript.
  *
- * The extension service worker requests https://vrchat.com/api/1/ directly
+ * The viewer document requests https://vrchat.com/api/1/ directly
  * with credentials: 'include'. Chrome's normal cookie jar attaches applicable
  * VRChat cookies; this extension never reads, stores, or constructs them.
  *
  * declarativeNetRequest appends the extension identifier to the browser
  * User-Agent and sets Origin for narrowly scoped VRChat write endpoints.
  * It never reads or modifies Cookie headers.
+ * Legacy runtime shims without the native DNR API use the bounded worker path.
  */
 export class SessionError extends Error {
   constructor(code, message) {
@@ -25,26 +28,51 @@ function assertVrchatApiUrl(url) {
   }
 }
 
-function sendMessage(message) {
+let tabIdPromise;
+function currentTabId() {
+  if (!globalThis.chrome?.tabs?.getCurrent) return Promise.resolve(undefined);
+  return tabIdPromise ||= withTimeout(new Promise(resolve => {
+    try { chrome.tabs.getCurrent(tab => {
+      const error = chrome.runtime.lastError;
+      resolve(!error && Number.isInteger(tab?.id) ? tab.id : undefined);
+    }); } catch { resolve(undefined); }
+  }), 1000).catch(() => undefined);
+}
+
+function sendMessage(message, signal) {
   return new Promise((resolve, reject) => {
     if (!globalThis.chrome?.runtime?.sendMessage) {
       reject(new SessionError('RUNTIME_UNAVAILABLE', 'Chrome extension runtime is unavailable.'));
       return;
     }
 
-    chrome.runtime.sendMessage(message, (response) => {
+    let settled = false;
+    const finish = (error, response) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      if (error) reject(error); else resolve(response);
+    };
+    const onAbort = () => finish(abortError());
+    const timer = setTimeout(() => finish(new SessionError('RUNTIME_TIMEOUT', 'Extension service worker did not respond.')),
+      CONFIG.API_MESSAGE_TIMEOUT_MS || 35000);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) { onAbort(); return; }
+    try { chrome.runtime.sendMessage(message, (response) => {
       const runtimeError = chrome.runtime.lastError;
       if (runtimeError) {
-        reject(new SessionError('RUNTIME_ERROR', runtimeError.message || 'Extension service worker is unavailable.'));
+        finish(new SessionError('RUNTIME_ERROR', runtimeError.message || 'Extension service worker is unavailable.'));
         return;
       }
-      resolve(response);
-    });
+      finish(null, response);
+    }); } catch (error) { finish(new SessionError('RUNTIME_ERROR', error?.message || 'Extension service worker is unavailable.')); }
   });
 }
 
 export async function fetchUsingVrchatSession(url, options = {}) {
   assertVrchatApiUrl(url);
+  if (globalThis.chrome?.declarativeNetRequest?.updateSessionRules) return fetchInViewer(url, options);
 
   const method = options.method || 'GET';
   const headers = {
@@ -60,7 +88,8 @@ export async function fetchUsingVrchatSession(url, options = {}) {
       method,
       headers,
       body,
-    });
+      viewerTabId: await currentTabId(),
+    }, options.signal);
 
     if (!response || response.ok !== true && !Number.isInteger(response.status)) {
       throw new SessionError('RUNTIME_ERROR', 'VRChat API request did not return a valid response.');
@@ -80,6 +109,7 @@ export async function fetchUsingVrchatSession(url, options = {}) {
       outcomeUnknown: response.outcomeUnknown === true,
     };
   } catch (error) {
+    if (error?.name === 'AbortError') throw error;
     if (error instanceof SessionError) throw error;
     throw new SessionError(
       'NETWORK_ERROR',

@@ -1,17 +1,21 @@
+import { CONFIG } from './config.js';
 // Selected-list details only. Discard this memory cache when the account changes.
 const validWorld = (world, id) => world && world.id === id && typeof world.name === 'string';
 const validGroup = group => group && (group.type === 'world' ? /^worlds(?:0|[1-9]\d*)$/.test(group.name) : group.type === 'vrcPlusWorld' && /^vrcPlusWorlds[1-9]\d*$/.test(group.name));
 // The server can return a successful tombstone object instead of null/404.
 // Keep its registration ID, but never use its black image or "???" labels.
 export function worldIsUnavailable(world) {
-  if(world?.pending)return false;
+  if(world?.pending || world?.loadFailed)return false;
   const name=typeof world?.name==='string'?world.name.trim():'';
   return Boolean(world?.unavailable || !name || /^[?？]+$/.test(name) || /^World Currently Unavailable$/i.test(name));
 }
 const catalogWorld = world => worldIsUnavailable(world) ? {id:world.id,unavailable:true} : world;
 export class WorldCatalog {
   constructor(){this.worlds=new Map();this.inflight=new Map();this.groupInflight=new Map();this.unsupportedGroups=new Set();}
-  async load(ids, api, {force=false, group=null, current=()=>true, shouldContinue=current, onProgress=()=>{}}={}) {
+  seed(rows) {
+    for(const world of rows) if(/^wrld_[A-Za-z0-9_-]+$/.test(world?.id||'') && validWorld(world,world.id)) this.worlds.set(world.id,catalogWorld(world));
+  }
+  async load(ids, api, {force=false, group=null, groupResponse=null, current=()=>true, shouldContinue=current, onProgress=()=>{}, onWorld=()=>{}}={}) {
     const unique=[...new Set(ids)].filter(id=>/^wrld_[A-Za-z0-9_-]+$/.test(id||''));
     const needed=unique.filter(id=>force || !this.worlds.has(id));
     if(!needed.length || !current() || !shouldContinue())return;
@@ -21,7 +25,7 @@ export class WorldCatalog {
       const key=`${group.type}:${group.name}`;
       let task=this.groupInflight.get(key);
       if(!task){
-        task=api.fetchJson(`/favorites/groups/${group.type}/${encodeURIComponent(group.name)}`).finally(()=>this.groupInflight.delete(key));
+        task=(groupResponse?Promise.resolve(groupResponse):api.fetchJson(`/favorites/groups/${group.type}/${encodeURIComponent(group.name)}`)).finally(()=>this.groupInflight.delete(key));
         this.groupInflight.set(key,task);
       }
       try {
@@ -33,7 +37,7 @@ export class WorldCatalog {
           for(const row of response.favorites){
             const id=row?.favoriteId;
             if(!allowed.has(id) || (row.type && row.type!==group.type) || (row.tags && (!Array.isArray(row.tags) || !row.tags.includes(group.name))))continue;
-            if(validWorld(row.world,id)){this.worlds.set(id,catalogWorld(row.world));supplied.add(id)}
+            if(validWorld(row.world,id)){this.worlds.set(id,catalogWorld(row.world));onWorld(row.world);supplied.add(id)}
             else if(row.world===null){this.worlds.set(id,{id,unavailable:true});supplied.add(id)}
           }
           notify();
@@ -47,7 +51,7 @@ export class WorldCatalog {
       }
     }
     const remaining=needed.filter(id=>!supplied.has(id));
-    let cursor=0;
+    let cursor=0, failure=null;
     const fetchOne=async id=>{
       if(!force && this.worlds.has(id)){notify();return}
       let task=this.inflight.get(id);
@@ -59,18 +63,25 @@ export class WorldCatalog {
             if(!validWorld(data,id))throw new Error('Invalid world response');
             world=catalogWorld(data);
           }catch(error){
-            if(error?.status===401 || error?.name==='AbortError')throw error;
+            // A transport failure or exhausted 429/5xx retry budget does not
+            // establish that this world is unavailable. Stop this list load.
+            if(![403,404].includes(error?.status))throw error;
             world={id,unavailable:true};
           }
-          if(current())this.worlds.set(id,world);
+          return world;
         })().finally(()=>this.inflight.delete(id));
         this.inflight.set(id,task);
       }
-      await task;notify();
+      const world=await task;
+      if(current()){this.worlds.set(id,world);onWorld(world);notify()}
     };
-    await Promise.all(Array.from({length:Math.min(4,remaining.length)},async()=>{
-      while(cursor<remaining.length && current() && shouldContinue())await fetchOne(remaining[cursor++]);
+    await Promise.all(Array.from({length:Math.min(CONFIG.API_READ_CONCURRENCY,remaining.length)},async()=>{
+      while(!failure && cursor<remaining.length && current() && shouldContinue()) {
+        try { await fetchOne(remaining[cursor++]); }
+        catch(error) { failure ||= error; }
+      }
     }));
+    if(failure)throw failure;
   }
 }
 export function worldPlatforms(world) {

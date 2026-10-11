@@ -1,5 +1,6 @@
 // Only static UI source text is translated. API/user content is never scanned.
 const english = Object.freeze({
+  "読み込み失敗": "Loading failed",
   "VRChatの通信制限に達しました。時間をおいて更新し、Favoriteの登録状態を確認してください。": "VRChat rate limit reached. Wait, then refresh to check your Favorites.",
   "フレンド情報を取得できませんでした。更新ボタンで再取得してください。": "Could not load friends. Use the refresh button to retry.",
   "一部のGroup情報を取得できませんでした。更新ボタンで再取得してください。": "Some Group information could not be loaded. Use the refresh button to retry.",

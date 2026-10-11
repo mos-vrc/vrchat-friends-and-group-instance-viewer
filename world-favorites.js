@@ -8,12 +8,27 @@ const validGroup = g => g && TYPES.has(g.type) && typeof g.name === 'string'
   && (g.type === 'world' ? /^worlds(?:0|[1-9]\d*)$/.test(g.name) : /^vrcPlusWorlds[1-9]\d*$/.test(g.name));
 const signature = rows => JSON.stringify(rows.map(r => [r.type, [...new Set(r.tags)].sort()]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));
 export class WorldFavorites {
-  constructor(api) { this.api=api; this.records=new Map(); this.groups=[]; this.ready=false; this.updatedAt=0; this.inflight=null; this.pending=false; }
+  constructor(api, user=null) { this.api=api; this.hasVrcPlus=Array.isArray(user?.tags)&&user.tags.includes('system_supporter'); this.records=new Map(); this.groups=[]; this.ready=false; this.updatedAt=0; this.inflight=null; this.pending=false; this.previews=new Map(); }
   async load(force=false) {
     if (!force && this.ready && Date.now()-this.updatedAt<300000) return this;
     if (this.inflight) return this.inflight;
     this.inflight=this.read().finally(()=>{this.inflight=null});
     return this.inflight;
+  }
+  async loadSelected(group, current=()=>true) {
+    if(!validGroup(group) || (group.type==='vrcPlusWorld'&&!this.hasVrcPlus))throw new Error('World Favorite list unavailable');
+    const response=await this.api.fetchJson(`/favorites/groups/${group.type}/${encodeURIComponent(group.name)}`);
+    const rows=response?.favorites;
+    if(!Array.isArray(rows) || !Number.isInteger(response.totalCount) || response.totalCount!==rows.length
+      || rows.some(r=>!r || !/^fvrt_[A-Za-z0-9_-]+$/.test(r.id||'') || !validId(r.favoriteId)
+        || (r.type && r.type!==group.type) || !Array.isArray(r.tags) || !r.tags.includes(group.name)
+        || r.tags.some(name=>!validGroup({type:group.type,name})))
+      || new Set(rows.map(r=>r.id)).size!==rows.length) {
+      const error=new Error('Selected World Favorite response unsupported');error.selectedListUnsupported=true;throw error;
+    }
+    // Display-only snapshot; never authorizes changes or marks the full store ready.
+    if(current())this.previews.set(group.key,[...new Set(rows.map(r=>r.favoriteId))]);
+    return response;
   }
   async refreshGroups() {
     if(this.inflight)await this.inflight;
@@ -21,9 +36,13 @@ export class WorldFavorites {
   }
   async read(includeRecords=true) {
     const groups=[],limits=new Map(),capacities=new Map();
+    // The website uses the current user's system_supporter tag for active
+    // VRC+. Slot limits alone may be nonzero for non-members. Early-adopter
+    // tags and old Favorite records do not authorize Plus lists.
+    const availableTypes=[...TYPES].filter(type=>type==='world'||this.hasVrcPlus);
     // The website's typed endpoint includes account-specific slot limits and
     // empty list metadata. Names are internal tags; labels never become tags.
-    for(const type of TYPES) {
+    for(const type of availableTypes) {
       try {
         const data=await this.api.fetchJson(`/favorites/groups/${type}`);
         if(!data || !Array.isArray(data.favoriteGroups)
@@ -49,10 +68,10 @@ export class WorldFavorites {
       }
     }
     const worldGroups=groups.filter(validGroup).map(g=>({type:g.type,name:g.name,label:g.displayName||g.display_name||g.name,key:`${g.type}:${g.name}`,capacity:capacities.get(g.type)}));
-    const records=includeRecords?new Map():this.records;
+    const records=includeRecords?new Map():new Map([...this.records].map(([id,rows])=>[id,rows.filter(r=>availableTypes.includes(r.type))]).filter(([,rows])=>rows.length));
     // Empty lists can be absent from metadata. Validate record tags by their
     // typed API names rather than requiring a metadata row for every tag.
-    const types=[...TYPES].filter(type=>limits.get(type)>0);
+    const types=availableTypes.filter(type=>limits.get(type)>0);
     for(const type of includeRecords?types:[]) {
       const rows=await this.api.fetchListPages(offset=>this.api.fetchJson(`/favorites?type=${type}&n=${CONFIG.API_PAGE_SIZE}&offset=${offset}`),5000,
         r=>r && /^fvrt_[A-Za-z0-9_-]+$/.test(r.id||'') && validId(r.favoriteId) && (!r.type||r.type===type)
@@ -67,7 +86,7 @@ export class WorldFavorites {
     // slots within the returned limit, never an extra fifth normal list just
     // because querying its contents returned an empty successful response.
     for(const g of recordGroups)ensure(g.type,g.name,g.name);
-    for(const type of TYPES) {
+    for(const type of availableTypes) {
       const limit=limits.get(type)||0;
       const slots=Array.from({length:limit},(_,i)=>i+1);
       for(const slot of slots){
@@ -80,10 +99,11 @@ export class WorldFavorites {
     worldGroups.sort((a,b)=>(a.type==='world'?0:1)-(b.type==='world'?0:1)
       || Number(a.name.match(/\d+$/)[0])-Number(b.name.match(/\d+$/)[0]));
     worldGroups.forEach((g,i)=>{if(g.synthetic)g.label=`Favorite Worlds ${i+1}`});
-    this.groups=worldGroups;this.records=records;if(includeRecords){this.ready=true;this.updatedAt=Date.now()}return this;
+    this.groups=worldGroups;this.records=records;if(includeRecords){this.previews.clear();this.ready=true;this.updatedAt=Date.now()}return this;
   }
   current(worldId) { return (this.records.get(worldId)||[]).map(r=>({...r,tags:[...r.tags]})); }
   members(key) {
+    if(!this.ready && this.previews.has(key))return [...this.previews.get(key)];
     const group=this.groups.find(g=>g.key===key);
     return group ? [...this.records].filter(([,rows])=>rows.some(r=>r.type===group.type&&r.tags.includes(group.name))).map(([id])=>id) : [];
   }
@@ -105,6 +125,7 @@ export class WorldFavorites {
     } finally {this.pending=false}
   }
   async add(worldId, row) {
+    if(row.type==='vrcPlusWorld'&&!this.hasVrcPlus)throw new Error('World Favorite list unavailable');
     let record;
     try{record=await this.api.fetchJson('/favorites',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:row.type,favoriteId:worldId,tags:row.tags})})}
     catch(error){
@@ -150,6 +171,7 @@ export class WorldFavorites {
   }
   async change(worldId, desired, expected) {
     if(!validId(worldId) || this.pending) throw new Error('World Favorite operation unavailable');
+    if(desired.some(r=>r.type==='vrcPlusWorld'&&!this.hasVrcPlus))throw new Error('World Favorite list unavailable');
     this.pending=true;
     try {
       try{await this.refreshMembership(worldId)}catch(error){error.favoriteNoMutation=true;throw error}

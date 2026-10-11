@@ -13,7 +13,7 @@ export class ImagePool {
     this.entries = new Map(); this.queue = []; this.active = 0;
     this.nextStart = 0; this.cooldownUntil = 0; this.timer = null;
   }
-  acquire(raw, fallbackRaw = '') {
+  acquire(raw, fallbackRaw = '', {defer=false} = {}) {
     const url = safeImageUrl(raw), fallback = safeImageUrl(fallbackRaw || this.fallbackFor(raw));
     if (!this.allowed(url) || (fallback && !this.allowed(fallback))) throw new Error('Invalid image URL');
     let entry = this.entries.get(url);
@@ -27,16 +27,22 @@ export class ImagePool {
       entry.promise.catch(() => {});
       this.entries.set(url, entry); this.queue.push(entry);
     }
-    entry.refs++; entry.at = Date.now(); this.pump();
+    entry.refs++; entry.at = Date.now(); if(!defer)this.pump();
     let released = false;
-    return { promise: entry.promise, release: () => {
+    return { promise: entry.promise, get state(){return entry.state}, release: () => {
       if (released) return; released = true; entry.refs--; entry.at = Date.now();
       if (!entry.refs && ['queued', 'loading'].includes(entry.state)) {
-        this.entries.delete(url); entry.cancelled = true; entry.controller?.abort();
+        // A reset can already have installed a newer request for this URL.
+        if (this.entries.get(url) === entry) this.entries.delete(url);
+        entry.cancelled = true; entry.controller?.abort();
         entry.reject(new DOMException('Image no longer needed', 'AbortError'));
       }
       this.trim();
     }};
+  }
+  prioritize(urls) {
+    const rank=new Map(urls.map((url,index)=>[url,index]));
+    this.queue.sort((a,b)=>(rank.get(a.url)??Infinity)-(rank.get(b.url)??Infinity));
   }
   allowed(url) {
     if (!safeImageUrl(url)) return false;
@@ -138,17 +144,22 @@ export class ImagePool {
 }
 
 export class ImageController {
-  constructor(pool, root = document.body) {
+  constructor(pool, root = document.body, {preloadPx=840} = {}) {
+    this.preloadPx=preloadPx; this.scrollFrame=null;
     this.pool = pool; this.root = root; this.items = new Map();
     this.observer = new IntersectionObserver(entries => {
-      for (const e of entries) if (e.isIntersecting) this.start(e.target);
-    }, { rootMargin: '240px' });
+      if(entries.some(e=>e.isIntersecting))this.sync();
+    }, { rootMargin: `${this.preloadPx}px` });
     this.mutations = new MutationObserver(() => this.sync());
     this.mutations.observe(root, { childList: true, subtree: true, attributes: true,
       attributeFilter: ['data-image-src', 'data-image-fallback-src'] });
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) { this.pool.pump(); this.sync(); }
     });
+    this.root.addEventListener('scroll',()=>{
+      if(this.scrollFrame!==null)return;
+      this.scrollFrame=requestAnimationFrame(()=>{this.scrollFrame=null;if(!document.hidden)this.sync()});
+    },{capture:true,passive:true});
     this.sync();
   }
   sync() {
@@ -157,36 +168,50 @@ export class ImageController {
         item.handle?.release(); this.observer.unobserve(image); this.items.delete(image);
       }
     }
+    const candidates=[],clips=new Map();
     for (const image of this.root.querySelectorAll('img[data-image-src]')) {
       if (!this.items.has(image)) {
         image.removeAttribute('src'); image.dataset.imageState = 'waiting';
         this.items.set(image, { url: image.dataset.imageSrc }); this.observer.observe(image);
       }
-      if (!document.hidden) {
-        const rect = image.getBoundingClientRect();
-        // Client rects account for clipping in the independently scrolling panes.
-        let visible = image.getClientRects().length && rect.bottom > -240 && rect.top < innerHeight + 240;
-        for (let parent = image.parentElement; visible && parent && parent !== this.root; parent = parent.parentElement) {
-          const style = getComputedStyle(parent);
-          if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
-            const clip = parent.getBoundingClientRect(); visible = rect.bottom > clip.top - 240 && rect.top < clip.bottom + 240;
-          }
-        }
-        if (visible) this.start(image);
+      if(document.hidden)continue;
+      const rect=image.getBoundingClientRect();
+      let nearby=Boolean(image.getClientRects().length) && rect.bottom>-Math.max(this.preloadPx,1200) && rect.top<innerHeight+Math.max(this.preloadPx,1200), visible=nearby;
+      let top=0,bottom=innerHeight;
+      for(let parent=image.parentElement;nearby && parent && parent!==this.root;parent=parent.parentElement){
+        if(!clips.has(parent))clips.set(parent,/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)?parent.getBoundingClientRect():null);
+        const clip=clips.get(parent);
+        if(clip){top=Math.max(top,clip.top);bottom=Math.min(bottom,clip.bottom);}
+      }
+      const preload=Math.max(this.preloadPx,Math.min(bottom-top,1200));
+      nearby=nearby && rect.bottom>top-preload && rect.top<bottom+preload;
+      visible=visible && rect.bottom>top && rect.top<bottom;
+      const item=this.items.get(image);
+      if(nearby)candidates.push({image,visible,distance:visible?0:Math.max(top-rect.bottom,rect.top-bottom,0)+1});
+      else if(item.handle?.state==='queued'){
+        // Drop only unstarted downloads; completed cache and active work survive.
+        const old=item.handle;item.handle=null;old.release();image.dataset.imageState='waiting';
       }
     }
+    candidates.sort((a,b)=>a.distance-b.distance);
+    this.pool.prioritize(candidates.map(c=>this.items.get(c.image).url));
+    for(const {image} of candidates)this.start(image);
+    this.pool.prioritize(candidates.map(c=>this.items.get(c.image).url));
+    this.pool.pump();
   }
+
   start(image) {
     const item = this.items.get(image);
     if (!item || item.handle || document.hidden || !image.isConnected) return;
     image.dataset.imageState = 'loading';
-    try { item.handle = this.pool.acquire(item.url, image.dataset.imageFallbackSrc); }
+    try { item.handle = this.pool.acquire(item.url, image.dataset.imageFallbackSrc, {defer:true}); }
     catch { image.dataset.imageState = 'error'; return; }
-    item.handle.promise.then(url => {
-      if (this.items.get(image) !== item || !image.isConnected) return;
+    const handle=item.handle;
+    handle.promise.then(url => {
+      if (this.items.get(image) !== item || item.handle!==handle || !image.isConnected) return;
       image.src = url; image.dataset.imageState = 'ready';
     }, () => {
-      if (this.items.get(image) === item && image.isConnected) image.dataset.imageState = 'error';
+      if (this.items.get(image) === item && item.handle===handle && image.isConnected) image.dataset.imageState = 'error';
     });
   }
   reset() {
