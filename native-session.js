@@ -104,7 +104,7 @@ export async function fetchInViewer(url, options = {}) {
     if (!globalThis.navigator?.locks?.request) return { ok: false, status: 0, code: 'NETWORK_ERROR', text: '' };
     const run = () => {
       if (method !== 'GET') return execute();
-      const count = Math.max(1, Math.min(2, CONFIG.API_READ_CONCURRENCY || 1));
+      const count = Math.max(1, Math.min(5, CONFIG.API_READ_CONCURRENCY || 1));
       const first = nextReadSlot++ % count;
       const unavailable = Symbol('busy');
       return (async () => {
@@ -119,7 +119,7 @@ export async function fetchInViewer(url, options = {}) {
         return navigator.locks.request(`vrc-viewer-api-read-${first}`, { signal: controller.signal }, execute);
       })();
     };
-    // Reads share the outer lock, with two bounded read slots. Writes take it
+    // Reads share the outer lock, with bounded read slots. Writes take it
     // exclusively, so a Favorite/rename/InviteMe mutation never overlaps reads
     // or another mutation. Browser-owned locks still release on tab close.
     return await withTimeout(navigator.locks.request('vrc-viewer-api-request',

@@ -298,6 +298,7 @@ export function slimWorld(world) {
   return {
     id: world.id,
     name: world.name || world.id,
+    authorName: typeof world.authorName === 'string' ? world.authorName : '',
     thumbnailImageUrl: world.thumbnailImageUrl || world.imageUrl || '',
     capacity: Number.isFinite(world.capacity) ? world.capacity : undefined,
     hardCapacity: deriveHardCapacity(world.capacity),

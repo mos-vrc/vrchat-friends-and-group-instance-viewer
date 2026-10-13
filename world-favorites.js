@@ -8,7 +8,7 @@ const validGroup = g => g && TYPES.has(g.type) && typeof g.name === 'string'
   && (g.type === 'world' ? /^worlds(?:0|[1-9]\d*)$/.test(g.name) : /^vrcPlusWorlds[1-9]\d*$/.test(g.name));
 const signature = rows => JSON.stringify(rows.map(r => [r.type, [...new Set(r.tags)].sort()]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));
 export class WorldFavorites {
-  constructor(api, user=null) { this.api=api; this.hasVrcPlus=Array.isArray(user?.tags)&&user.tags.includes('system_supporter'); this.records=new Map(); this.groups=[]; this.ready=false; this.updatedAt=0; this.inflight=null; this.pending=false; this.previews=new Map(); }
+  constructor(api, user=null) { this.api=api; this.hasVrcPlus=Array.isArray(user?.tags)&&user.tags.includes('system_supporter'); this.records=new Map(); this.groups=[]; this.ready=false; this.updatedAt=0; this.inflight=null; this.pending=false; this.previews=new Map(); this.progressRecords=new Map(); this.progressGroups=[]; this.onProgress=()=>{}; }
   async load(force=false) {
     if (!force && this.ready && Date.now()-this.updatedAt<300000) return this;
     if (this.inflight) return this.inflight;
@@ -42,7 +42,13 @@ export class WorldFavorites {
     const availableTypes=[...TYPES].filter(type=>type==='world'||this.hasVrcPlus);
     // The website's typed endpoint includes account-specific slot limits and
     // empty list metadata. Names are internal tags; labels never become tags.
-    for(const type of availableTypes) {
+    const parallel=async tasks=>{
+      const results=await Promise.allSettled(tasks);
+      const failed=results.find(r=>r.status==='rejected');
+      if(failed)throw failed.reason;
+    };
+    if(includeRecords){this.ready=false;this.progressRecords=new Map();this.progressGroups=[];}
+    await parallel(availableTypes.map(async type=>{
       try {
         const data=await this.api.fetchJson(`/favorites/groups/${type}`);
         if(!data || !Array.isArray(data.favoriteGroups)
@@ -54,7 +60,7 @@ export class WorldFavorites {
         limits.set(type,data.maxFavoriteGroups);capacities.set(type,data.maxFavoritesPerGroup);
         groups.push(...data.favoriteGroups.map(g=>({...g,type})));
       } catch(error) {
-        if(type==='vrcPlusWorld' && error?.status===403){limits.set(type,0);continue}
+        if(type==='vrcPlusWorld' && error?.status===403){limits.set(type,0);return}
         // Older servers may not support the typed endpoint. Do not mistake
         // authentication, rate limits, transient failures or malformed data
         // for an account without lists.
@@ -64,42 +70,70 @@ export class WorldFavorites {
             g=>g && typeof g.name==='string' && g.type===type,g=>g.name);
           groups.push(...rows);
           limits.set(type,type==='world'?Math.max(4,rows.filter(validGroup).length):rows.some(validGroup)?Math.max(4,rows.filter(validGroup).length):0);
-        }catch(legacyError){if(type==='vrcPlusWorld'&&[403,404].includes(legacyError?.status)){limits.set(type,0);continue}throw legacyError}
+        }catch(legacyError){if(type==='vrcPlusWorld'&&[403,404].includes(legacyError?.status)){limits.set(type,0);return}throw legacyError}
       }
-    }
-    const worldGroups=groups.filter(validGroup).map(g=>({type:g.type,name:g.name,label:g.displayName||g.display_name||g.name,key:`${g.type}:${g.name}`,capacity:capacities.get(g.type)}));
+    }));
+    const buildGroups=records=>{
+      const worldGroups=groups.filter(validGroup).map(g=>({type:g.type,name:g.name,label:g.displayName||g.display_name||g.name,key:`${g.type}:${g.name}`,capacity:capacities.get(g.type)}));
+      const recordGroups=[...records.values()].flat().flatMap(r=>r.tags.map(name=>({type:r.type,name})));
+      const ensure=(type,name,label,synthetic=false)=>{
+        if(!worldGroups.some(g=>g.type===type&&g.name===name))worldGroups.push({type,name,label,key:`${type}:${name}`,synthetic,capacity:capacities.get(type)});
+      };
+      // Server-confirmed lists/record tags take precedence. Fill only remaining
+      // slots within the returned limit, never an extra fifth normal list just
+      // because querying its contents returned an empty successful response.
+      for(const g of recordGroups)ensure(g.type,g.name,g.name);
+      for(const type of availableTypes) {
+        const limit=limits.get(type)||0;
+        const slots=Array.from({length:limit},(_,i)=>i+1);
+        for(const slot of slots){
+          const count=worldGroups.filter(g=>g.type===type).length;
+          if(count>=limit)break;
+          const name=`${type==='world'?'worlds':'vrcPlusWorlds'}${slot}`;
+          ensure(type,name,'',true);
+        }
+      }
+      worldGroups.sort((a,b)=>(a.type==='world'?0:1)-(b.type==='world'?0:1)
+        || Number(a.name.match(/\d+$/)[0])-Number(b.name.match(/\d+$/)[0]));
+      worldGroups.forEach((g,i)=>{if(g.synthetic)g.label=`Favorite Worlds ${i+1}`});
+      return worldGroups;
+    };
     const records=includeRecords?new Map():new Map([...this.records].map(([id,rows])=>[id,rows.filter(r=>availableTypes.includes(r.type))]).filter(([,rows])=>rows.length));
     // Empty lists can be absent from metadata. Validate record tags by their
     // typed API names rather than requiring a metadata row for every tag.
     const types=availableTypes.filter(type=>limits.get(type)>0);
-    for(const type of includeRecords?types:[]) {
-      const rows=await this.api.fetchListPages(offset=>this.api.fetchJson(`/favorites?type=${type}&n=${CONFIG.API_PAGE_SIZE}&offset=${offset}`),5000,
-        r=>r && /^fvrt_[A-Za-z0-9_-]+$/.test(r.id||'') && validId(r.favoriteId) && (!r.type||r.type===type)
-          && Array.isArray(r.tags) && r.tags.length>0 && r.tags.every(name=>validGroup({type,name})),r=>r.id);
-      for(const row of rows){const list=records.get(row.favoriteId)||[];list.push({id:row.id,type,tags:[...new Set(row.tags)]});records.set(row.favoriteId,list)}
-    }
-    const recordGroups=[...records.values()].flat().flatMap(r=>r.tags.map(name=>({type:r.type,name})));
-    const ensure=(type,name,label,synthetic=false)=>{
-      if(!worldGroups.some(g=>g.type===type&&g.name===name))worldGroups.push({type,name,label,key:`${type}:${name}`,synthetic,capacity:capacities.get(type)});
+    let failure=null;
+    const collect=(type,rows,target)=>{
+      for(const row of rows){const list=target.get(row.favoriteId)||[];
+        const record={id:row.id,type,tags:[...new Set(row.tags)]};
+        target.set(row.favoriteId,[...list.filter(old=>old.id!==row.id),record]);}
     };
-    // Server-confirmed lists/record tags take precedence. Fill only remaining
-    // slots within the returned limit, never an extra fifth normal list just
-    // because querying its contents returned an empty successful response.
-    for(const g of recordGroups)ensure(g.type,g.name,g.name);
-    for(const type of availableTypes) {
-      const limit=limits.get(type)||0;
-      const slots=Array.from({length:limit},(_,i)=>i+1);
-      for(const slot of slots){
-        const count=worldGroups.filter(g=>g.type===type).length;
-        if(count>=limit)break;
-        const name=`${type==='world'?'worlds':'vrcPlusWorlds'}${slot}`;
-        ensure(type,name,'',true);
-      }
+    const notify=()=>{try{this.onProgress()}catch{}};
+    if(includeRecords){this.progressGroups=buildGroups(this.progressRecords);notify();}
+    try {
+      await parallel((includeRecords?types:[]).map(async type=>{
+        try {
+          const rows=await this.api.fetchListPages(offset=>{
+            if(failure)throw failure;
+            return this.api.fetchJson(`/favorites?type=${type}&n=${CONFIG.API_PAGE_SIZE}&offset=${offset}`);
+          },5000,
+            r=>r && /^fvrt_[A-Za-z0-9_-]+$/.test(r.id||'') && validId(r.favoriteId) && (!r.type||r.type===type)
+              && Array.isArray(r.tags) && r.tags.length>0 && r.tags.every(name=>validGroup({type,name})),r=>r.id,
+            rows=>{if(failure)return;collect(type,rows,this.progressRecords);
+              this.progressGroups=buildGroups(this.progressRecords);notify();});
+          collect(type,rows,records);
+        }catch(error){failure ||= error;throw error;}
+      }));
+    }catch(error){
+      this.progressRecords=new Map();this.progressGroups=[];notify();throw error;
     }
-    worldGroups.sort((a,b)=>(a.type==='world'?0:1)-(b.type==='world'?0:1)
-      || Number(a.name.match(/\d+$/)[0])-Number(b.name.match(/\d+$/)[0]));
-    worldGroups.forEach((g,i)=>{if(g.synthetic)g.label=`Favorite Worlds ${i+1}`});
-    this.groups=worldGroups;this.records=records;if(includeRecords){this.previews.clear();this.ready=true;this.updatedAt=Date.now()}return this;
+    const worldGroups=buildGroups(records);
+    this.groups=worldGroups;this.records=records;if(includeRecords){this.previews.clear();this.ready=true;this.updatedAt=Date.now();this.progressRecords=new Map();this.progressGroups=[];notify()}return this;
+  }
+  displayNumber(worldId) {
+    if(this.ready)return this.number(worldId);
+    const rows=this.progressRecords.get(worldId)||[];
+    return this.progressGroups.findIndex(g=>rows.some(r=>r.type===g.type&&r.tags.includes(g.name)))+1;
   }
   current(worldId) { return (this.records.get(worldId)||[]).map(r=>({...r,tags:[...r.tags]})); }
   members(key) {

@@ -119,16 +119,21 @@ export class ObjectCache {
     }
   }
 
-  get(key, ttlMs) {
+  get(key, ttlMs, { preserveExpired = false } = {}) {
     this.load();
     const record = this.entries.get(key);
     if (!record) return null;
     if (Date.now() - record.cachedAt >= ttlMs) {
-      this.entries.delete(key);
-      this.dirty = true;
+      if (!preserveExpired) { this.entries.delete(key); this.dirty = true; }
       return null;
     }
     return record.data;
+  }
+
+  getStale(key, maxAgeMs) {
+    this.load();
+    const record = this.entries.get(key);
+    return record && Date.now() - record.cachedAt < maxAgeMs ? record.data : null;
   }
 
   set(key, data) {

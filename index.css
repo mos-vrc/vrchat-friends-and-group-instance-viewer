@@ -20,18 +20,16 @@
   --sidebar-location-thumb-height: 46px;
 
   /* Right-side instance display size. Medium preserves the previous standard layout. */
-  --instance-min-viewport: 510px;
   --instance-thumb-width: 230px;
   --instance-thumb-height: 170px;
-  --instance-thumb-fade-height: 65px;
   --instance-card-min-height: 170px;
   --instance-overlay-title-bottom: 12px;
   --instance-avatar-size: 72px;
   --instance-user-row-height: 98px;
   --instance-user-name-height: 28px;
   --instance-user-name-line-height: 20px;
-  --instance-private-min-height: var(--instance-private-min-height);
-  --instance-private-users-min-height: var(--instance-private-users-min-height);
+  --instance-private-min-height: 118px;
+  --instance-private-users-min-height: 116px;
   --instance-panel-pad-top: 9px;
   --instance-panel-pad-x: 12px;
   --instance-panel-pad-bottom: 8px;
@@ -56,13 +54,10 @@ html, body {
 }
 /* Minimum viewport follows the selected right-side display size:
    sidebar + thumbnail + about one friend tile + card/panel spacing. */
-body { min-width: var(--instance-min-viewport); }
 
 body[data-instance-size="small"] {
-  --instance-min-viewport: 476px;
   --instance-thumb-width: 200px;
   --instance-thumb-height: 148px;
-  --instance-thumb-fade-height: 55px;
   --instance-card-min-height: 148px;
   --instance-overlay-title-bottom: 10px;
   --instance-avatar-size: 60px;
@@ -82,10 +77,8 @@ body[data-instance-size="small"] {
 }
 
 body[data-instance-size="medium"] {
-  --instance-min-viewport: 510px;
   --instance-thumb-width: 230px;
   --instance-thumb-height: 170px;
-  --instance-thumb-fade-height: 65px;
   --instance-card-min-height: 170px;
   --instance-overlay-title-bottom: 12px;
   --instance-avatar-size: 72px;
@@ -105,10 +98,8 @@ body[data-instance-size="medium"] {
 }
 
 body[data-instance-size="large"] {
-  --instance-min-viewport: 576px;
   --instance-thumb-width: 280px;
   --instance-thumb-height: 197px;
-  --instance-thumb-fade-height: 75px;
   --instance-card-min-height: 197px;
   --instance-overlay-title-bottom: 14px;
   --instance-avatar-size: 88px;
@@ -432,14 +423,6 @@ body.sidebar-collapsed .sidebar-toggle {
   border-bottom: 1px solid var(--line);
   box-shadow: 0 1px 0 rgba(0,0,0,.18);
 }
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-}
 .toolbar-options {
   position: relative;
   flex: 0 0 auto;
@@ -473,8 +456,6 @@ body.sidebar-collapsed .sidebar-toggle {
 :is(.tab, .world-view-tab):hover { background: #1f303e; color: #dce8ef; }
 :is(.tab, .world-view-tab).active { background: rgba(29,161,242,.16); border-color: #2e86b8; color: #6ec8ff; font-weight: 700; }
 .sort {
-  width: 176px;
-  min-width: 176px;
   height: 32px;
   box-sizing: border-box;
   padding: 0 30px 0 10px;
@@ -827,13 +808,6 @@ body.sidebar-collapsed .sidebar-toggle {
 .thumb-wrap.thumb-clickable:hover .thumb { filter: brightness(1.06); }
 .thumb-wrap.thumb-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .thumb { width: 100%; height: var(--instance-thumb-height); display: block; object-fit: cover; object-position: center; background: #0b1117; transition: filter .15s ease; }
-.thumb-fade {
-  position: absolute;
-  inset: auto 0 0 0;
-  height: var(--instance-thumb-fade-height);
-  background: linear-gradient(to bottom, rgba(0,0,0,0), rgba(0,0,0,.60));
-  pointer-events: none;
-}
 .overlay-title {
   position: absolute;
   left: 50%;
@@ -1067,30 +1041,9 @@ body.sidebar-collapsed .sidebar-toggle {
   letter-spacing: .1px;
   box-shadow: 0 1px 3px rgba(0,0,0,.35);
 }
-.foaf-badge {
-  position: absolute;
-  top: 25px;
-  left: 4px;
-  z-index: 2;
-  min-width: 34px;
-  height: 18px;
-  padding: 1px 5px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  background: #6b7280;
-  color: #fff;
-  font-size: 9px;
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: .1px;
-  box-shadow: 0 1px 3px rgba(0,0,0,.35);
-}
 
 /* Small mode: compact avatar badges to avoid Owner/Favorite overlap on 60px icons. */
-body[data-instance-size="small"] .owner-badge,
-body[data-instance-size="small"] .foaf-badge {
+body[data-instance-size="small"] .owner-badge {
   left: 3px;
   min-width: 0;
   height: 16px;
@@ -1104,9 +1057,6 @@ body[data-instance-size="small"] .owner-badge {
   top: 3px;
 }
 
-body[data-instance-size="small"] .foaf-badge {
-  top: 21px;
-}
 
 body[data-instance-size="small"] .favorite-badge-participant {
   top: 3px;
@@ -1621,10 +1571,6 @@ body::after {
   background: #070c14;
 }
 
-.thumb-fade {
-  height: 100px;
-  background: linear-gradient(to bottom, rgba(5,9,16,0), rgba(5,9,16,.82));
-}
 
 .overlay-title {
   background:
@@ -1742,9 +1688,6 @@ body::after {
   box-shadow: 0 2px 9px rgba(0,0,0,.32);
 }
 
-.foaf-badge {
-  background: rgba(80, 92, 108, .92);
-}
 
 .instance-highlight {
   outline-color: #61ddea;
@@ -2816,21 +2759,18 @@ body[data-theme="dark"] .invite-me-button.is-success {
 body[data-instance-display="simple"][data-instance-size="small"] {
   --instance-thumb-height: var(--instance-avatar-size);
   --instance-simple-thumb-max-height: 148px;
-  --instance-thumb-fade-height: 34px;
   --instance-card-min-height: var(--instance-avatar-size);
   --instance-overlay-title-bottom: 4px;
 }
 body[data-instance-display="simple"][data-instance-size="medium"] {
   --instance-thumb-height: var(--instance-avatar-size);
   --instance-simple-thumb-max-height: 170px;
-  --instance-thumb-fade-height: 38px;
   --instance-card-min-height: var(--instance-avatar-size);
   --instance-overlay-title-bottom: 5px;
 }
 body[data-instance-display="simple"][data-instance-size="large"] {
   --instance-thumb-height: var(--instance-avatar-size);
   --instance-simple-thumb-max-height: 197px;
-  --instance-thumb-fade-height: 42px;
   --instance-card-min-height: var(--instance-avatar-size);
   --instance-overlay-title-bottom: 6px;
 }
@@ -2860,7 +2800,7 @@ body[data-instance-display="simple"] .card .thumb {
   height: 100%;
   min-height: 0;
   object-fit: cover;
-  object-position: center top;
+  object-position: center center;
 }
 body[data-instance-display="simple"] .info-panel {
   min-height: var(--instance-avatar-size);
@@ -3135,14 +3075,6 @@ body[data-theme="dark"][data-instance-display="simple"] .private-user-name {
 /* =========================================================
    v1.5: friend-centric location view
    ========================================================= */
-.tab-mode-divider {
-  width: 1px;
-  height: 22px;
-  flex: 0 0 auto;
-  align-self: center;
-  margin: 0 2px;
-  background: linear-gradient(to bottom, transparent, rgba(127, 189, 221, .34), transparent);
-}
 .friend-view-tab {
   padding-left: 12px;
   padding-right: 12px;
@@ -3421,21 +3353,18 @@ a.friend-location-world-link:hover { color: #d9f5ff; text-decoration: underline;
 
 /* Simple mode: move location details onto the thumbnail and narrow the card. */
 body[data-instance-display="simple"] .friend-location-item {
-  /* Allow the middle/name column to shrink fully. The previous 58px minimum
-     could push the thumbnail/count past the card edge at Small/Medium sizes. */
-  grid-template-columns: var(--friend-location-avatar-size) minmax(0, 1fr) var(--friend-location-simple-thumb-width);
+  grid-template-columns: var(--instance-avatar-size) minmax(0, 1fr);
+  height: calc(var(--instance-avatar-size) + 16px);
   gap: 7px;
 }
-body[data-instance-display="simple"] .friend-location-copy {
-  justify-content: center;
-}
+body[data-instance-display="simple"] .friend-location-copy { display: none; }
 body[data-instance-display="simple"] .friend-location-world-line,
 body[data-instance-display="simple"] .friend-location-meta {
   display: none;
 }
 body[data-instance-display="simple"] .friend-location-thumb-link {
-  width: var(--friend-location-simple-thumb-width);
-  height: calc(var(--friend-location-card-height) - 14px);
+  width: 100%;
+  height: var(--instance-avatar-size);
 }
 body[data-instance-display="simple"] .friend-location-thumb::after {
   content: '';
@@ -3520,18 +3449,8 @@ body[data-instance-size="large"] .friend-instance-preview { width: min(760px, ca
   outline-offset: 2px;
 }
 
-/* Narrow windows use the available width instead of overflowing fixed cards. */
-@media (max-width: 620px) {
-  .friend-location-item {
-    flex-basis: 100%;
-    width: 100%;
-  }
-}
 
 /* Theme integration */
-body[data-theme="light"] .tab-mode-divider {
-  background: linear-gradient(to bottom, transparent, rgba(80, 100, 120, .32), transparent);
-}
 body[data-theme="light"] .friend-location-section,
 body[data-theme="light"] .friend-location-item {
   border-color: #d9dde3;
@@ -3599,31 +3518,18 @@ body[data-theme="dark"] .friend-instance-preview { background: rgba(17,18,20,.98
    v1.5: Friend view refinements + Favorite editing
    ========================================================= */
 
-/* Friend cards share responsive grid tracks across every section.
-   auto-fill keeps track sizing independent from the number of cards in a
-   particular Favorite List, while 1fr absorbs spare width before the next
-   column can fit. */
+/* Simple Friend cards share fixed-width tracks across every section. */
 body[data-instance-size="small"] {
-  --friend-location-card-min-width-normal: 320px;
   --friend-location-card-min-width-simple: 218px;
 }
 body[data-instance-size="medium"] {
-  --friend-location-card-min-width-normal: 360px;
   --friend-location-card-min-width-simple: 248px;
 }
 body[data-instance-size="large"] {
-  --friend-location-card-min-width-normal: 400px;
   --friend-location-card-min-width-simple: 288px;
-}
-body[data-instance-display="normal"] {
-  --friend-location-card-min-width: var(--friend-location-card-min-width-normal);
-}
-body[data-instance-display="simple"] {
-  --friend-location-card-min-width: var(--friend-location-card-min-width-simple);
 }
 .friend-location-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--friend-location-card-min-width)), 1fr));
   align-items: start;
 }
 .friend-location-item {
@@ -3639,10 +3545,6 @@ body[data-instance-display="simple"] {
 body[data-theme="light"] .friend-location-item.friend-location-no-preview:hover { background: rgba(255,255,255,.96); border-color: #d9dde3; }
 body[data-theme="ash"] .friend-location-item.friend-location-no-preview:hover { background: #2b2d31; border-color: #3f4147; }
 body[data-theme="dark"] .friend-location-item.friend-location-no-preview:hover { background: #17181a; border-color: #2e3035; }
-@media (max-width: 620px) {
-  .friend-location-grid { grid-template-columns: minmax(0, 1fr); }
-  .friend-location-item { width: auto; max-width: none; }
-}
 
 /* Monochrome location placeholders are geometrically centered rather than
    relying on platform emoji metrics. */
@@ -3826,9 +3728,7 @@ body[data-theme="dark"] .favorite-menu { background: rgba(17,18,20,.99); border-
 /* In Simple friend view the middle text column is allowed to collapse. This
    keeps the right-side thumbnail and its 3-part count fully inside the card
    at Small/Medium display sizes. */
-body[data-instance-display="simple"] .friend-location-item {
-  grid-template-columns: var(--friend-location-avatar-size) minmax(0, 1fr) var(--friend-location-simple-thumb-width);
-}
+
 body[data-instance-display="simple"] .friend-location-thumb-simple-meta {
   min-width: 0;
 }
@@ -4083,10 +3983,6 @@ body.sidebar-location-mode .friend-sidebar-location-status {
 .toolbar {
   flex-wrap: nowrap;
 }
-.toolbar-left {
-  flex-wrap: nowrap;
-  gap: 8px;
-}
 .tabs {
   display: flex;
   align-items: center;
@@ -4132,23 +4028,7 @@ body.sidebar-location-mode .friend-sidebar-location-status {
   padding-right: 11px;
 }
 
-/* Preserve the known-good sort width; let the lower-priority update label
-   yield space first when the main pane gets tight. */
-.sort {
-  flex: 0 0 176px;
-}
-.updated-at {
-  min-width: 0;
-  flex: 0 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 
-/* The old visual divider is no longer needed because the Friend button is
-   already separated by the tabs gap. */
-.tab-mode-divider {
-  display: none;
-}
 
 /* Theme-aware segmented-control shell. */
 body[data-theme="light"] .instance-tab-segment {
@@ -4176,61 +4056,9 @@ body[data-theme="dark"] .tabs .instance-tab-segment > .instance-view-tab {
   border-right-color: #303238;
 }
 
-/* First compact step: reduce dead space while keeping all labels intact. */
-@media (max-width: 1080px) {
-  .toolbar {
-    gap: 7px;
-    padding-left: 10px;
-    padding-right: 9px;
-  }
-  .toolbar-left {
-    gap: 6px;
-  }
-  .tabs {
-    gap: 6px;
-  }
-  .tabs .instance-tab-segment > .instance-view-tab {
-    padding-left: 7px;
-    padding-right: 7px;
-  }
-  .friend-view-tab {
-    padding-left: 9px;
-    padding-right: 9px;
-  }
-  .toolbar-divider {
-    margin-left: 0;
-    margin-right: 0;
-  }
-}
 
-/* Second compact step for genuinely narrow windows. No tab label is
-   abbreviated; only padding/gaps and font size are reduced slightly. */
-@media (max-width: 860px) {
-  .toolbar {
-    gap: 5px;
-    padding-left: 7px;
-    padding-right: 7px;
-  }
-  .toolbar-left {
-    gap: 5px;
-  }
-  .tabs {
-    gap: 5px;
-  }
-  .tabs .instance-tab-segment > .instance-view-tab {
-    padding-left: 5px;
-    padding-right: 5px;
-    font-size: 10px;
-  }
-  .friend-view-tab {
-    padding-left: 7px;
-    padding-right: 7px;
-    font-size: 10px;
-  }
-  .toolbar-divider {
-    height: 20px;
-  }
-}
+
+
 
 /* =========================================================
    v1.5.2.7: Friend-tab selected state
@@ -4335,12 +4163,10 @@ body[data-theme="light"] .favorite-group-editor-error { color: #b42318; }
 
 /* Language labels retain their full text, including narrow windows and zoom. */
 .toolbar { flex-wrap: wrap; height: auto; min-height: 48px; }
-.toolbar-left { flex: 1 1 520px; flex-wrap: wrap; min-width: 0; }
 .toolbar-options { flex: 0 0 auto; margin-left: auto; }
 .tabs { max-width: 100%; flex-wrap: wrap; }
 .instance-tab-segment { max-width: 100%; height: 32px; flex-wrap: nowrap; overflow: hidden; }
 .tabs .instance-tab-segment > .instance-view-tab { flex: 0 0 auto; }
-.sort { flex: 0 0 auto; width: auto; min-width: 176px; max-width: 100%; }
 .updated-at { flex: 0 0 auto; overflow: visible; text-overflow: clip; white-space: nowrap; }
 .settings-panel { width: 350px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 100px); overflow-y: auto; }
 .settings-row { flex-wrap: wrap; }
@@ -4353,10 +4179,6 @@ body[data-theme="light"] .favorite-group-editor-error { color: #b42318; }
 .friend-location-section-count { flex-shrink: 0; white-space: nowrap; }
 .favorite-group-editor-label { flex-wrap: wrap; }
 .favorite-group-name-input { min-width: 0; max-width: 100%; }
-@media (max-width: 600px) {
-  .toolbar-left { flex-basis: 100%; }
-  .toolbar-divider { display: none; }
-}
 
 .settings-panel { position: fixed; }
 .offline-sort-settings .settings-label { flex: 1 1 auto; }
@@ -4385,7 +4207,6 @@ body[data-instance-display="simple"] .card .thumb-wrap .people-count,
 body[data-instance-display="simple"] .card .thumb-wrap + .invite-me-button-simple {
   font-size: 8px; padding-inline: 2px; letter-spacing: 0; white-space: nowrap;
 }
-.sort { min-width: 100px; }
 .reload-button, .recent-button { width: 30px; height: 30px; padding: 0; font-size: 20px; line-height: 1; flex-shrink: 0; }
 .recent-button { font-size: 17px; }
 /* World management shares the toolbar tab selection styles and aria-pressed state. */
@@ -4409,7 +4230,7 @@ body[data-instance-display="simple"] .card .thumb-wrap + .invite-me-button-simpl
 .world-tabs button {flex:0 0 auto;font:inherit;font-size:12px;color:inherit;background:transparent;border:1px solid rgba(128,148,170,.4);border-radius:6px;padding:7px 10px;cursor:pointer;}
 .world-tabs button[aria-selected="true"] {border-color:var(--accent);background:rgba(104,201,234,.2);}
 .world-list-count {opacity:.75;font-variant-numeric:tabular-nums;}
-.world-list-heading {display:flex;gap:8px;align-items:baseline;min-width:0;}
+.world-list-heading {display:flex;gap:8px;align-items:baseline;min-width:0;margin-top:6px;}
 .world-list-heading h2 {overflow-wrap:anywhere;}
 .world-list-heading button,.world-list-editor button,.world-copy {color:inherit;background:transparent;border:1px solid rgba(128,148,170,.4);border-radius:5px;cursor:pointer;}
 .world-list-editor {display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px;font-size:12px;}
@@ -4421,13 +4242,12 @@ body[data-instance-size="small"] {--world-card-min:180px;--world-title-size:12px
 body[data-instance-size="large"] {--world-card-min:280px;--world-title-size:15px;--world-text-size:13px;}
 .recent-world-grid {grid-template-columns:repeat(auto-fill,minmax(min(var(--world-card-min),100%),1fr));}
 .recent-world-name {font-size:var(--world-title-size);}
-.recent-world-author,.world-card-actions {font-size:var(--world-text-size);}
-.world-card-actions {display:flex;justify-content:space-between;align-items:center;gap:6px;padding:0 10px 10px;}
+.recent-world-author {font-size:var(--world-text-size);}
 .world-copy {font-size:16px;min-width:26px;min-height:24px;}
 .recent-globe-icon {width:18px;height:18px;display:block;}
 .world-favorite-button.favorite-badge {width:24px;height:18px;font-size:10px;line-height:18px;border-radius:9px;}
 .world-favorite-button.favorite-badge:not(.is-favorite) {width:18px;}
-.world-favorite-button.favorite-badge.is-pending {background:#626b75;color:#fff;box-shadow:0 0 0 1px rgba(184,199,214,.5);}
+.world-favorite-button.favorite-badge.is-pending:not(.is-favorite) {background:#626b75;color:#fff;box-shadow:0 0 0 1px rgba(184,199,214,.5);}
 
 .recent-worlds {padding:0 10px 12px;box-sizing:border-box;}
 .world-copy,.world-list-heading button {display:inline-flex;align-items:center;justify-content:center;}
@@ -4446,7 +4266,7 @@ body[data-instance-size="small"] .world-unavailable-icon {font-size:30px;}
 /* Keep refresh first and its separator together across view changes. */
 .toolbar-refresh {display:flex;align-items:center;gap:8px;flex:0 0 auto;}
 .refresh-divider {display:block;width:1px;height:22px;flex:0 0 1px;background:var(--line,rgba(128,148,170,.35));}
-@media (max-width:860px) {.toolbar-refresh {gap:5px;}}
+
 
 /* Compact preference switch; long Japanese/English labels wrap in their column. */
 .owner-settings { flex-wrap: nowrap; }
@@ -4461,29 +4281,18 @@ body[data-instance-size="small"] .world-unavailable-icon {font-size:30px;}
   .offline-sort-settings select { flex-basis: 100%; }
 }
 
-/* Owner reference is distinct from the actual participants. */
-.participant-area { display:flex; flex-wrap:wrap; align-items:flex-start; gap:10px; min-width:0; }
-.participant-area > .participant-list { flex:1 1 var(--instance-avatar-size); min-width:0; }
-.non-friend-owner-info { flex:0 0 auto; width:calc(var(--instance-avatar-size) + 16px); box-sizing:border-box; border:1px dashed #8091a5; border-radius:6px; padding:5px 7px; background:rgba(128,145,165,.08); }
+/* Owner reference occupies one participant grid cell; subsequent rows reuse
+   the whole width while the dashed frame keeps the reference distinct. */
+.participant-list.has-owner { padding:4px; }
+body[data-instance-display] .participant-list.has-owner { padding:4px; }
+.non-friend-owner-info {
+  width:var(--instance-avatar-size); height:var(--instance-user-row-height);
+  min-width:0; box-sizing:border-box; border:0; border-radius:4px;
+  padding:0; outline:1px dashed #8091a5; outline-offset:2px;
+  background:rgba(128,145,165,.08);
+}
 .non-friend-owner-info .participant { width:var(--instance-avatar-size); margin:0; }
-.owner-info-label, .owner-info-presence { font-size:10px; line-height:1.35; text-align:center; overflow-wrap:anywhere; }
-.owner-info-label { margin-bottom:5px; font-weight:700; }
-.owner-info-presence { margin-top:5px; }
-body[data-instance-display="simple"] .participant-area { gap:6px; }
-/* The owner frame and friend grid share the available width in every mode.
-   Reserve one avatar as the flex basis so very narrow panels wrap the grid
-   below the owner instead of clipping an avatar. */
-body[data-instance-display="simple"] .participant-area > .participant-list {
-  flex:1 1 var(--instance-avatar-size); width:auto; min-width:0;
-}
-.friend-instance-preview .participant-area {
-  width:var(--friend-preview-grid-width); max-width:100%;
-}
-body[data-instance-display] .friend-instance-preview .participant-area > .participant-list {
-  flex:1 1 var(--instance-avatar-size); width:auto; min-width:0;
-  grid-template-columns:repeat(auto-fill,var(--instance-avatar-size));
-}
-
+body[data-instance-display="simple"] .non-friend-owner-info { height:var(--instance-avatar-size); }
 .owner-badge.owner-badge-reference { background:#66717e; color:#fff; }
 
 .favorite-menu { min-width:min(188px,calc(100vw - 16px)); max-height:calc(100dvh - 16px); overflow-y:auto; box-sizing:border-box; }
@@ -4810,9 +4619,6 @@ body[data-theme="sand"][data-instance-display="simple"] .private-user-name {
   border: 0;
   text-shadow: 0 1px 2px rgba(0,0,0,.95), 0 0 4px rgba(0,0,0,.55);
 }
-body[data-theme="sand"] .tab-mode-divider {
-  background: linear-gradient(to bottom, transparent, rgba(80, 100, 120, .32), transparent);
-}
 body[data-theme="sand"] .friend-location-section,
 body[data-theme="sand"] .friend-location-item {
   border-color: #e8dfd4;
@@ -4917,11 +4723,6 @@ body[data-theme="sand"] .theme-button.active::after { background: var(--accent);
 
 .favorite-group-save-status { margin: 7px 0 0; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
 
-/* At the supported narrow viewport, preserve avatar size while fitting the
-   owner reference frame within the panel's edge, like the ordinary avatars. */
-@media (max-width: 620px) {
-  .non-friend-owner-info { width:calc(var(--instance-avatar-size) + 2px); padding-inline:0; }
-}
 
 /* Mist: pale green-gray surfaces with charcoal text and deep green accents. */
 html[data-theme="mist"],
@@ -5245,9 +5046,6 @@ body[data-theme="mist"][data-instance-display="simple"] .private-user-name {
   border: 0;
   text-shadow: 0 1px 2px rgba(0,0,0,.95), 0 0 4px rgba(0,0,0,.55);
 }
-body[data-theme="mist"] .tab-mode-divider {
-  background: linear-gradient(to bottom, transparent, rgba(80, 100, 120, .32), transparent);
-}
 body[data-theme="mist"] .friend-location-section,
 body[data-theme="mist"] .friend-location-item {
   border-color: #dddddd;
@@ -5380,3 +5178,148 @@ body[data-theme="mist"] .world-tabs button[aria-selected="true"] {background:#d4
 
 /* Align world navigation with the top of the scroll pane, including when sticky. */
 .instance-list.world-view { padding-top: 0; }
+
+/* Friend cards: status beside the name in Normal; square name-overlay in Simple. */
+.friend-location-name-line { display:flex; align-items:center; gap:4px; }
+.friend-location-name-line > .online-dot { flex:0 0 auto; line-height:16px; }
+.friend-location-name-line > .friend-location-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.friend-location-avatar-name,
+.friend-location-online-dot { display:none; }
+body[data-instance-display="simple"] .friend-location-avatar-wrap,
+body[data-instance-display="simple"] .friend-location-profile-link,
+body[data-instance-display="simple"] .friend-location-avatar {
+  width:var(--instance-avatar-size); height:var(--instance-avatar-size);
+}
+body[data-instance-display="simple"] .friend-location-avatar { box-sizing:border-box; border-radius:6px; }
+body[data-instance-display="simple"] .friend-location-avatar-name {
+  display:block; position:absolute; z-index:3; left:0; right:0; bottom:0;
+  min-width:0; box-sizing:border-box; padding:3px 4px 4px;
+  border-radius:0 0 6px 6px;
+  background:linear-gradient(to bottom,rgba(8,10,14,.36),rgba(8,10,14,.78));
+  text-shadow:0 1px 2px rgba(0,0,0,.95),0 0 4px rgba(0,0,0,.55);
+  pointer-events:none;
+}
+body[data-instance-display="simple"] .friend-location-avatar-name .friend-location-name {
+  display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:#fff; font-size:10px; font-weight:700; line-height:13px;
+}
+body[data-instance-display="simple"] .friend-location-online-dot {
+  display:grid; z-index:4; top:2px; left:2px; right:auto; bottom:auto;
+  width:14px; height:14px; box-sizing:border-box; border-width:1px;
+  background:rgba(8,10,14,.85); border-color:rgba(8,10,14,.85);
+}
+body[data-instance-display="simple"] .friend-location-favorite { top:2px; right:2px; z-index:5; }
+body[data-instance-display="simple"] .friend-location-thumb-simple-title { font-size:10px; }
+body[data-instance-display="simple"][data-instance-size="large"] .friend-location-avatar-name .friend-location-name { font-size:11px; line-height:14px; }
+
+/* Main-pane layout responds to the space left after the draggable sidebar. */
+body { min-width:0; }
+.main-pane { container-type:inline-size; container-name:viewer; }
+.toolbar { display:grid; grid-template-columns:minmax(0,max-content) minmax(0,1fr) auto; grid-template-areas:"nav meta options"; gap:8px; padding:8px 10px; min-height:48px; box-sizing:border-box; }
+.toolbar-navigation { grid-area:nav; display:flex; align-items:center; min-width:0; gap:8px; }
+.toolbar-meta { grid-area:meta; display:flex; align-items:center; gap:8px; min-width:0; }
+.toolbar-options { grid-area:options; margin:0; justify-self:end; gap:6px; }
+.toolbar .tabs { flex:1 1 auto; min-width:0; max-width:none; flex-wrap:nowrap; gap:6px; overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; }
+.toolbar .instance-tab-segment { flex:0 0 auto; max-width:none; width:max-content; }
+.toolbar .friend-view-tab { flex:0 0 auto; padding:0 9px; font-size:11px; }
+.toolbar .tabs .instance-tab-segment > .instance-view-tab { padding:0 9px; font-size:11px; }
+.toolbar .toolbar-divider { display:block; flex:0 0 1px; height:22px; margin:0; }
+.toolbar .sort { min-width:0; width:150px; flex:0 0 150px; font-size:11px; }
+.toolbar .sort[hidden] { display:none; }
+.toolbar .updated-at { min-width:0; flex:0 1 auto; width:max-content; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.toolbar .toolbar-refresh { gap:8px; }
+.toolbar.is-two-row { grid-template-columns:minmax(0,1fr) auto; grid-template-areas:"nav nav" "meta options"; row-gap:6px; }
+.toolbar.is-two-row .toolbar-divider { display:none; }
+.toolbar.is-tight { padding:7px; gap:5px; }
+.toolbar.is-tight .toolbar-navigation,.toolbar.is-tight .toolbar-meta { gap:5px; }
+.toolbar.is-tight .toolbar-refresh { gap:5px; }
+.toolbar.is-tight .tabs { gap:5px; }
+.toolbar.is-tight .tabs .instance-tab-segment > .instance-view-tab { padding:0 6px; }
+.toolbar.is-tight .friend-view-tab { padding:0 7px; }
+
+/* Both Friend formats use fixed-width, left-aligned tracks. */
+body[data-instance-size="small"] { --friend-location-card-max:340px; }
+body[data-instance-size="medium"] { --friend-location-card-max:380px; }
+body[data-instance-size="large"] { --friend-location-card-max:420px; }
+body[data-instance-display="normal"] .friend-location-item { width:100%; max-width:var(--friend-location-card-max); justify-self:start; }
+body[data-instance-display="simple"] .friend-location-grid {
+  grid-template-columns:repeat(auto-fill,minmax(0,min(100%,var(--friend-location-card-min-width-simple))));
+  justify-content:start;
+}
+body[data-instance-display="simple"] .friend-location-item { width:100%; max-width:var(--friend-location-card-min-width-simple); justify-self:start; }
+
+/* Keep group headings readable without an extra heavy frame around cards. */
+body[data-theme] .friend-location-section { background:transparent; border-color:transparent; box-shadow:none; }
+body[data-theme] .friend-location-section-header { background:color-mix(in srgb,var(--accent) 7%,transparent); border-bottom-color:color-mix(in srgb,var(--text) 10%,transparent); }
+body[data-theme] .friend-location-section-header:hover { background:color-mix(in srgb,var(--accent) 12%,transparent); }
+.friend-location-grid { padding:7px 0; }
+.friend-location-section-title { flex:1 1 auto; }
+.friend-location-section-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.friend-location-section-icon { flex:0 0 auto; }
+body[data-instance-display="simple"] .friend-location-thumb-simple-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.friend-location-world-link { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.recent-world-name { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; height:calc(1.3em + 8px); line-height:1.3; box-sizing:border-box; padding:6px 9px 2px; }
+.recent-world-author { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; height:calc(1.3em + 7px); line-height:1.3; box-sizing:border-box; padding:0 9px 7px; }
+.world-list-heading h2 { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Fixed image boxes and text lines prevent async metadata from moving controls. */
+.friend-location-avatar-wrap,.friend-location-thumb-link,.participant-avatar-wrap { flex-shrink:0; }
+.friend-location-avatar,.friend-location-thumb { aspect-ratio:1; }
+.friend-location-thumb { aspect-ratio:auto; }
+.friend-location-name-line { height:16px; flex-shrink:0; }
+
+/* Expand the pointer hit area while retaining the visible badge dimensions. */
+.favorite-action-button,.world-favorite-button,.world-copy,.favorite-group-edit-button { position:relative; }
+.favorite-action-button::before,.world-favorite-button::before,.world-copy::before,.favorite-group-edit-button::before { content:""; position:absolute; inset:-3px; }
+.favorite-badge { position:absolute; }
+:is(button,select,a,input):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.friend-location-section-header:focus-visible { outline-offset:-2px; }
+body[data-theme] :is(button,select,a,input):focus-visible,
+.favorite-action-button.favorite-badge:focus-visible,
+.favorite-menu-item:focus-visible,
+body[data-theme] .invite-me-button:focus-visible {
+  outline:2px solid var(--focus-ring,var(--accent)); outline-offset:2px;
+}
+body[data-theme] .friend-location-section-header:focus-visible { outline-offset:-2px; }
+/* At phone-like pane widths, keep at least one complete user tile visible.
+   Stack only the instance image and user panel; normal desktop rows remain. */
+@container viewer (max-width:400px) {
+  #list .card { grid-template-columns:minmax(0,1fr); }
+  #list .card .thumb-wrap { height:auto; min-height:0; max-height:none; aspect-ratio:16/9; align-self:start; }
+  #list .card .thumb { position:absolute; inset:0; width:100%; height:100%; }
+  #list .card .info-panel { border-left:0; border-top:1px solid var(--line); }
+  body[data-instance-display="normal"] .friend-location-item { grid-template-columns:var(--friend-location-avatar-size) minmax(0,1fr) 60px; }
+  body[data-instance-display="normal"] .friend-location-thumb-link { width:100%; }
+}
+
+/* Fixed Normal tracks prevent surplus width becoming gaps between cards. */
+body[data-instance-display="normal"] .friend-location-grid {
+  grid-template-columns:repeat(auto-fill,minmax(0,min(100%,var(--friend-location-card-max))));
+  justify-content:start;
+}
+
+/* In exceptionally narrow panes, move the options above the sort/time row.
+   Keep the select label intact and let the timestamp wrap instead of vanish. */
+.toolbar.is-two-row.is-narrow-controls { grid-template-areas:"nav options" "meta meta"; }
+.toolbar.is-narrow-controls .toolbar-meta { flex-wrap:wrap; row-gap:4px; }
+.toolbar.is-narrow-controls .updated-at { flex:0 0 auto; min-width:max-content; overflow:visible; }
+
+/* Tooltip-bearing text links should not cover the unused part of a row. */
+.friend-location-world-link { width:fit-content; max-width:100%; }
+
+/* Compact World management controls live on the thumbnail, outside its link. */
+.recent-world-card .world-platforms {
+  position:absolute; top:7px; left:7px; z-index:6;
+  max-width:calc(100% - 48px); padding:2px 5px; border-radius:4px;
+  background:rgba(7,13,23,.78); color:#edf2f6; font-size:10px; line-height:15px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.recent-world-card .world-copy {
+  position:absolute; right:7px; bottom:7px; z-index:6;
+  width:26px; height:24px; padding:3px; color:#e1e7ed;
+  background:rgba(7,13,23,.65); border-color:rgba(220,230,240,.3);
+}
+.recent-world-card .world-copy:hover,
+.recent-world-card .world-copy:focus-visible { background:rgba(7,13,23,.94); color:#fff; border-color:#c8d8e6; }
+.recent-world-card .world-copy:focus-visible { outline:2px solid var(--focus-ring); outline-offset:2px; }
+.recent-world-card .world-unavailable { padding-top:24px; }

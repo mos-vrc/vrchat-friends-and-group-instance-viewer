@@ -122,7 +122,7 @@ export class VrchatApiClient {
 
   // Reject partial results: callers may retain a same-account cache, while
   // Favorite writes must only use a complete, validated live snapshot.
-  async fetchListPages(fetchPage, limit, validRow, keyFor) {
+  async fetchListPages(fetchPage, limit, validRow, keyFor, onProgress = null) {
     const result = [], seen = new Set();
     let offset = 0;
     for (let pageNumber = 0; pageNumber <= limit; pageNumber += 1) {
@@ -139,6 +139,7 @@ export class VrchatApiClient {
       }
       if (!added) throw new ApiError(200, t('一覧APIが同じページを繰り返したため取得を停止しました。'));
       if (result.length > limit) throw new ApiError(200, t('一覧取得の安全上限に達しました。'));
+      if (onProgress) onProgress([...result]);
       offset += rows.length;
     }
     throw new ApiError(200, t('一覧取得のページ上限に達しました。'));
@@ -530,7 +531,10 @@ export class DataRepository {
   }
 
   getCachedWorld(worldId) {
-    return this.worldCache?.get(worldId, CONFIG.WORLD_CACHE_TTL_MS) ?? null;
+    const fresh = this.worldCache?.get(worldId, CONFIG.WORLD_CACHE_TTL_MS, { preserveExpired: true });
+    if (fresh) return fresh;
+    const stale = this.worldCache?.getStale(worldId, CONFIG.WORLD_STALE_MAX_AGE_MS);
+    return stale ? { ...stale, cacheStale: true } : null;
   }
 
   cacheWorld(world) {
@@ -898,10 +902,11 @@ export class DataRepository {
 
   async fetchWorldUncached(worldId) {
     if (!worldId || worldId === 'offline' || worldId === 'private') return null;
-    const cached = this.worldCache.get(worldId, CONFIG.WORLD_CACHE_TTL_MS);
+    const cached = this.worldCache.get(worldId, CONFIG.WORLD_CACHE_TTL_MS, { preserveExpired: true });
     if (cached !== null) return cached;
     const data = await this.api.fetchWorld(worldId);
     const normalized = slimWorld(data);
+    if (this.disposed) throw new DOMException('Repository disposed', 'AbortError');
     this.worldCache.set(worldId, normalized);
     return normalized;
   }

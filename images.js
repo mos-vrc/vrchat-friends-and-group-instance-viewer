@@ -1,3 +1,4 @@
+import { PersistentImageCache } from './image-cache.js';
 import { safeImageUrl } from './domain.js';
 
 // One body download per URL in this Viewer. Blobs are kept in memory only;
@@ -7,9 +8,10 @@ export class ImagePool {
     maxBytes = 8 * 1024 * 1024, cacheBytes = 32 * 1024 * 1024,
     maxEntries = 256, fetcher = (...args) => fetch(...args),
     createUrl = blob => URL.createObjectURL(blob), revokeUrl = url => URL.revokeObjectURL(url),
-    visible = () => !globalThis.document?.hidden, fallbackFor = () => '' } = {}) {
+    visible = () => !globalThis.document?.hidden, fallbackFor = () => '',
+    persistent = new PersistentImageCache(), getScope = () => '' } = {}) {
     Object.assign(this, { concurrency, timeoutMs, minIntervalMs, maxBytes, cacheBytes,
-      maxEntries, fetcher, createUrl, revokeUrl, visible, fallbackFor });
+      maxEntries, fetcher, createUrl, revokeUrl, visible, fallbackFor, persistent, getScope });
     this.entries = new Map(); this.queue = []; this.active = 0;
     this.nextStart = 0; this.cooldownUntil = 0; this.timer = null;
   }
@@ -21,7 +23,7 @@ export class ImagePool {
       this.entries.delete(url); entry = null;
     }
     if (!entry) {
-      entry = { url, fallback, refs: 0, state: 'queued', at: Date.now(), size: 0 };
+      entry = { url, fallback, scope: this.getScope(), refs: 0, state: 'queued', at: Date.now(), size: 0 };
       entry.promise = new Promise((resolve, reject) => { entry.resolve = resolve; entry.reject = reject; });
       // A detached consumer may release the request before attaching its handler.
       entry.promise.catch(() => {});
@@ -108,8 +110,10 @@ export class ImagePool {
     entry.controller = new AbortController();
     const timer = setTimeout(() => entry.controller.abort(), this.timeoutMs);
     try {
-      let blob;
-      try { blob = await this.body(entry.url, entry.controller.signal); }
+      const saved = await this.persistent.read(entry.url, entry.scope);
+      if (entry.cancelled || entry.controller.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+      let blob = saved.blob;
+      try { if (!blob) blob = await this.body(entry.url, entry.controller.signal); }
       catch (error) {
         // No timeout/network/429 replay. A definitive missing sized endpoint
         // can use its original image once, within the same slot and deadline.
@@ -120,6 +124,8 @@ export class ImagePool {
       if (entry.cancelled || entry.controller.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
       entry.objectUrl = this.createUrl(blob); entry.size = blob.size;
       entry.state = 'ready'; entry.at = Date.now(); entry.resolve(entry.objectUrl);
+      // Saving is independent of display and bounded by the cache deadline.
+      if (!saved.blob) void this.persistent.write(entry.url, entry.scope, blob, saved.generation).catch(() => {});
     } catch (error) {
       entry.state = 'error'; entry.at = Date.now(); entry.reject(error);
     } finally { clearTimeout(timer); }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>VRChat Friends &amp; Group Instance Viewer v1.6.4.21</title>
+  <title>VRChat Friends &amp; Group Instance Viewer v1.6.5.18</title>
   <link rel="stylesheet" href="index.css">
 </head>
 <body data-theme="dark-blue" data-instance-display="normal">
@@ -50,7 +50,7 @@
 
     <main id="mainPane" class="main-pane">
       <section class="toolbar">
-        <div class="toolbar-left">
+        <div class="toolbar-navigation">
           <div class="toolbar-refresh">
           <button id="reloadButton" class="reload-button" type="button" title="最新情報を取得" aria-label="更新"><svg class="reload-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.66 17.66A8 8 0 1 1 20 12M20 5v7h-7"/></svg></button>
             <span class="refresh-divider" aria-hidden="true"></span>
@@ -64,6 +64,8 @@
             </div>
             <button class="tab friend-view-tab" data-view="friends" role="tab" aria-selected="false" title="フレンドごとに現在の居場所を表示">フレンド</button>
           </div>
+        </div>
+        <div class="toolbar-meta">
           <span class="toolbar-divider" aria-hidden="true"></span>
           <select id="sort" class="sort" aria-label="並び順">
             <option value="friends_desc" title="フレンドが多い順">フレンド順</option>
