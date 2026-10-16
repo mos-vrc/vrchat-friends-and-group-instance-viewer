@@ -1,0 +1,254 @@
+/* Keep world list navigation visible inside the right pane's scroll area. */
+.world-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  background: var(--bg);
+  padding-top: 6px;
+  padding-bottom: 10px;
+  box-shadow: 0 1px 0 var(--line);
+  scroll-padding-inline: 6px;
+}
+
+/* Align world navigation with the top of the scroll pane, including when sticky. */
+.instance-list.world-view { padding-top: 0; }
+
+/* Friend cards: status beside the name in Normal; square name-overlay in Simple. */
+.friend-location-name-line { display:flex; align-items:center; gap:4px; }
+.friend-location-name-line > .online-dot { flex:0 0 auto; line-height:16px; }
+.friend-location-name-line > .friend-location-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.friend-location-avatar-name,
+.friend-location-online-dot { display:none; }
+body[data-instance-display="simple"] .friend-location-avatar-wrap,
+body[data-instance-display="simple"] .friend-location-profile-link,
+body[data-instance-display="simple"] .friend-location-avatar {
+  width:var(--instance-avatar-size); height:var(--instance-avatar-size);
+}
+body[data-instance-display="simple"] .friend-location-avatar { box-sizing:border-box; border-radius:6px; }
+body[data-instance-display="simple"] .friend-location-avatar-name {
+  display:block; position:absolute; z-index:3; left:0; right:0; bottom:0;
+  min-width:0; box-sizing:border-box; padding:3px 4px 4px;
+  border-radius:0 0 6px 6px;
+  background:linear-gradient(to bottom,rgba(8,10,14,.36),rgba(8,10,14,.78));
+  text-shadow:0 1px 2px rgba(0,0,0,.95),0 0 4px rgba(0,0,0,.55);
+  pointer-events:none;
+}
+body[data-instance-display="simple"] .friend-location-avatar-name .friend-location-name {
+  display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:#fff; font-size:10px; font-weight:700; line-height:13px;
+}
+body[data-instance-display="simple"] .friend-location-online-dot {
+  display:grid; z-index:4; top:2px; left:2px; right:auto; bottom:auto;
+  width:14px; height:14px; box-sizing:border-box; border-width:1px;
+  background:rgba(8,10,14,.85); border-color:rgba(8,10,14,.85);
+}
+body[data-instance-display="simple"] .friend-location-favorite { top:2px; right:2px; z-index:5; }
+body[data-instance-display="simple"] .friend-location-thumb-simple-title { font-size:10px; }
+body[data-instance-display="simple"][data-instance-size="large"] .friend-location-avatar-name .friend-location-name { font-size:11px; line-height:14px; }
+
+/* Main-pane layout responds to the space left after the draggable sidebar. */
+body { min-width:0; }
+.main-pane { container-type:inline-size; container-name:viewer; }
+.toolbar { display:grid; grid-template-columns:minmax(0,max-content) minmax(0,1fr) auto; grid-template-areas:"nav meta options"; gap:8px; padding:8px 10px; min-height:48px; box-sizing:border-box; }
+.toolbar-navigation { grid-area:nav; display:flex; align-items:center; min-width:0; gap:8px; }
+.toolbar-meta { grid-area:meta; display:flex; align-items:center; gap:8px; min-width:0; }
+.toolbar-options { grid-area:options; margin:0; justify-self:end; gap:6px; }
+.toolbar .tabs { flex:1 1 auto; min-width:0; max-width:none; flex-wrap:nowrap; gap:6px; overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; }
+.toolbar .instance-tab-segment { flex:0 0 auto; max-width:none; width:max-content; }
+.toolbar .friend-view-tab { flex:0 0 auto; padding:0 9px; font-size:11px; }
+.toolbar .tabs .instance-tab-segment > .instance-view-tab { padding:0 9px; font-size:11px; }
+.toolbar .toolbar-divider { display:block; flex:0 0 1px; height:22px; margin:0; }
+.toolbar .sort { min-width:0; width:150px; flex:0 0 150px; font-size:11px; }
+.toolbar .sort[hidden] { display:none; }
+.toolbar .updated-at { min-width:0; flex:0 1 auto; width:max-content; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.toolbar .toolbar-refresh { gap:8px; }
+.toolbar.is-two-row { grid-template-columns:minmax(0,1fr) auto; grid-template-areas:"nav nav" "meta options"; row-gap:6px; }
+.toolbar.is-two-row .toolbar-divider { display:none; }
+.toolbar.is-tight { padding:7px; gap:5px; }
+.toolbar.is-tight .toolbar-navigation,.toolbar.is-tight .toolbar-meta { gap:5px; }
+.toolbar.is-tight .toolbar-refresh { gap:5px; }
+.toolbar.is-tight .tabs { gap:5px; }
+.toolbar.is-tight .tabs .instance-tab-segment > .instance-view-tab { padding:0 6px; }
+.toolbar.is-tight .friend-view-tab { padding:0 7px; }
+
+/* Both Friend formats use fixed-width, left-aligned tracks. */
+body[data-instance-size="small"] { --friend-location-card-max:300px; }
+body[data-instance-size="medium"] { --friend-location-card-max:330px; }
+body[data-instance-size="large"] { --friend-location-card-max:370px; }
+body[data-instance-display="normal"] .friend-location-item { width:100%; max-width:var(--friend-location-card-max); justify-self:start; padding:3px 5px; column-gap:6px; }
+body[data-instance-display="simple"] .friend-location-grid {
+  grid-template-columns:repeat(auto-fill,minmax(0,min(100%,var(--friend-location-card-min-width-simple))));
+  justify-content:start;
+}
+body[data-instance-display="simple"] .friend-location-item { width:100%; max-width:var(--friend-location-card-min-width-simple); justify-self:start; }
+
+/* Keep group headings readable without an extra heavy frame around cards. */
+body[data-theme] .friend-location-section { background:transparent; border-color:transparent; box-shadow:none; }
+body[data-theme] .friend-location-section-header { background:color-mix(in srgb,var(--accent) 7%,transparent); border-bottom-color:color-mix(in srgb,var(--text) 10%,transparent); }
+body[data-theme] .friend-location-section-header:hover { background:color-mix(in srgb,var(--accent) 12%,transparent); }
+/* Ash headings use neutral surfaces instead of the purple accent tint. */
+body[data-theme="ash"] .friend-location-section-heading,
+body[data-theme="ash"] .friend-location-section-header {
+  background: #2b2d31;
+}
+body[data-theme="ash"] .friend-location-section-header {
+  border-bottom-color: #424449;
+}
+body[data-theme="ash"] .friend-location-section-header:hover {
+  background: #37393e;
+}
+body[data-theme="ash"] .favorite-group-edit-button:hover {
+  background: #37393e;
+}
+
+.friend-location-grid { padding:4px 0; }
+.friend-location-section-title { flex:1 1 auto; }
+.friend-location-section-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.friend-location-section-icon { flex:0 0 auto; }
+body[data-instance-display="simple"] .friend-location-thumb-simple-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.friend-location-world-link { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.recent-world-name { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; height:calc(1.3em + 8px); line-height:1.3; box-sizing:border-box; padding:6px 9px 2px; }
+.recent-world-author { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; height:calc(1.3em + 7px); line-height:1.3; box-sizing:border-box; padding:0 9px 7px; }
+.world-list-heading h2 { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Fixed image boxes and text lines prevent async metadata from moving controls. */
+.friend-location-avatar-wrap,.friend-location-thumb-link,.participant-avatar-wrap { flex-shrink:0; }
+.friend-location-avatar,.friend-location-thumb { aspect-ratio:1; }
+.friend-location-thumb { aspect-ratio:auto; }
+.friend-location-name-line { height:16px; flex-shrink:0; }
+
+/* Expand the pointer hit area while retaining the visible badge dimensions. */
+.favorite-action-button,.world-favorite-button,.world-copy,.favorite-group-edit-button { position:relative; }
+.favorite-action-button::before,.world-favorite-button::before,.world-copy::before,.favorite-group-edit-button::before { content:""; position:absolute; inset:-3px; }
+.favorite-badge { position:absolute; }
+:is(button,select,a,input):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.friend-location-section-header:focus-visible { outline-offset:-2px; }
+body[data-theme] :is(button,select,a,input):focus-visible,
+.favorite-action-button.favorite-badge:focus-visible,
+.favorite-menu-item:focus-visible,
+body[data-theme] .invite-me-button:focus-visible {
+  outline:2px solid var(--focus-ring,var(--accent)); outline-offset:2px;
+}
+body[data-theme] .friend-location-section-header:focus-visible { outline-offset:-2px; }
+/* At phone-like pane widths, keep at least one complete user tile visible.
+   Stack only the instance image and user panel; normal desktop rows remain. */
+@container viewer (max-width:400px) {
+  #list .card { grid-template-columns:minmax(0,1fr); }
+  #list .card .thumb-wrap { height:auto; min-height:0; max-height:none; aspect-ratio:16/9; align-self:start; }
+  #list .card .thumb { position:absolute; inset:0; width:100%; height:100%; }
+  #list .card .info-panel { border-left:0; border-top:1px solid var(--line); }
+  body[data-instance-display="normal"] .friend-location-item { grid-template-columns:var(--friend-location-avatar-size) minmax(0,1fr) 60px; }
+  body[data-instance-display="normal"] .friend-location-thumb-link { width:100%; }
+}
+
+/* Fixed Normal tracks prevent surplus width becoming gaps between cards. */
+body[data-instance-display="normal"] .friend-location-grid {
+  grid-template-columns:repeat(auto-fill,minmax(0,min(100%,var(--friend-location-card-max))));
+  justify-content:start;
+}
+
+/* In exceptionally narrow panes, move the options above the sort/time row.
+   Keep the select label intact and let the timestamp wrap instead of vanish. */
+.toolbar.is-two-row.is-narrow-controls { grid-template-areas:"nav options" "meta meta"; }
+.toolbar.is-narrow-controls .toolbar-meta { flex-wrap:wrap; row-gap:4px; }
+.toolbar.is-narrow-controls .updated-at { flex:0 0 auto; min-width:max-content; overflow:visible; }
+
+/* Tooltip-bearing text links should not cover the unused part of a row. */
+.friend-location-world-link { width:fit-content; max-width:100%; }
+
+/* Compact World management controls live on the thumbnail, outside its link. */
+.recent-world-card .world-platforms {
+  position:absolute; top:7px; left:7px; z-index:6;
+  max-width:calc(100% - 48px); padding:2px 5px; border-radius:4px;
+  background:rgba(7,13,23,.78); color:#edf2f6; font-size:10px; line-height:15px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.recent-world-card .world-copy {
+  position:absolute; right:7px; bottom:7px; z-index:6;
+  width:26px; height:24px; padding:3px; color:#e1e7ed;
+  background:rgba(7,13,23,.65); border-color:rgba(220,230,240,.3);
+}
+.recent-world-card .world-copy:hover,
+.recent-world-card .world-copy:focus-visible { background:rgba(7,13,23,.94); color:#fff; border-color:#c8d8e6; }
+.recent-world-card .world-copy:focus-visible { outline:2px solid var(--focus-ring); outline-offset:2px; }
+.recent-world-card .world-unavailable { padding-top:24px; }
+
+/* Notifications share the toolbar tab palette. The count is contained in its button. */
+
+/* Compact Normal instances. Keep avatar size and unrelated views unchanged. */
+body[data-instance-display="normal"] #list .card {
+  --instance-thumb-height: 155px;
+  --instance-card-min-height: 155px;
+  --instance-panel-pad-top: 5px;
+  --instance-panel-pad-bottom: 5px;
+  --instance-title-margin-bottom: 3px;
+  --instance-summary-margin-bottom: 3px;
+  --instance-user-name-height: 22px;
+  --instance-user-row-height: calc(var(--instance-avatar-size) + var(--instance-user-name-height) + 2px);
+  margin-bottom: 6px;
+}
+body[data-instance-display="normal"][data-instance-size="small"] #list .card {
+  --instance-thumb-height: 138px;
+  --instance-card-min-height: 138px;
+  --instance-panel-pad-top: 3px;
+  --instance-panel-pad-bottom: 3px;
+  --instance-title-margin-bottom: 2px;
+  --instance-summary-margin-bottom: 2px;
+}
+body[data-instance-display="normal"][data-instance-size="large"] #list .card {
+  --instance-thumb-height: 178px;
+  --instance-card-min-height: 178px;
+  --instance-panel-pad-top: 6px;
+  --instance-panel-pad-bottom: 6px;
+  --instance-user-name-height: 24px;
+}
+body[data-instance-display="normal"] #list .card .participant-name {
+  padding: 1px 5px;
+  flex: 0 0 var(--instance-user-name-height);
+}
+body[data-instance-display="normal"] #list .card .participant-list {
+  flex: 0 0 auto;
+  overflow-y: visible;
+}
+body[data-instance-display="normal"] #list .card .thumb-wrap {
+  height: auto;
+  align-self: stretch;
+}
+body[data-instance-display="normal"] #list .card .thumb {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  object-position: center;
+}
+/* Preserve the existing image-above-details layout in narrow panes. */
+@container viewer (max-width:400px) {
+  body[data-instance-display="normal"] #list .card .thumb-wrap {
+    height: auto;
+    min-height: 0;
+    aspect-ratio: 16/9;
+    align-self: start;
+  }
+}
+
+/* Simple Offline cards display a readable local date/time, without extra tips. */
+body[data-instance-display="simple"] .friend-offline .friend-location-placeholder-ellipsis {display:none;}
+body[data-instance-display="simple"] .friend-offline .friend-location-thumb-simple-title.friend-location-simple-activity {
+  display:block;white-space:normal;text-overflow:clip;line-height:14px;font-size:10px;font-weight:600;padding:3px 5px;
+}
+.friend-location-simple-activity time {display:block;font-variant-numeric:tabular-nums;}
+.friend-location-simple-activity time > span {display:block;white-space:nowrap;}
+
+/* Loading text stays inside the existing notification header. */
+.notification-panel-header h2 {display:flex;align-items:center;min-width:0;flex:1;white-space:nowrap;}
+.notification-header-status {font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.notification-header-status:empty {margin-left:0;}
+.notification-panel-header > div {flex:none;}
+.notification-status[hidden] {display:none;}
+.recent-notice:empty {display:none;}
+
+.avatar-frame-wrap {display:block;position:relative;width:fit-content;height:fit-content;line-height:0;overflow:hidden;}
+.avatar-frame-wrap > img:not(.avatar-icon-frame) {border-radius:50%;transform:scale(.88461538);transform-origin:center;}
+.avatar-icon-frame {position:absolute;left:50%;top:50%;width:115%;height:115%;transform:translate(-50%,-50%);max-width:none;object-fit:contain;pointer-events:none;z-index:1;}
+.avatar-icon-frame:not([src]),.avatar-icon-frame[data-image-state="error"] {visibility:hidden;}
+.notification-avatar .avatar-frame-wrap {width:56px;height:56px;margin:auto;}
+@media(max-width:460px){.notification-avatar .avatar-frame-wrap {width:42px;height:42px;}}

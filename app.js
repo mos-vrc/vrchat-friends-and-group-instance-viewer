@@ -1,46 +1,31 @@
-import { ToolbarLayout } from './toolbar-layout.js';
-import { readFailureMessage } from './ui-feedback.js';
-import { WorldCatalog, worldPlatforms, worldIsUnavailable } from './world-catalog.js';
-import { fetchRecentWorlds } from './recent-worlds.js';
-import { WorldFavorites } from './world-favorites.js';
-import { SidebarResizer } from './sidebar-resize.js';
-import { t, lt, captureStaticLabels, setLocale, getLocale, relocalize, initialLanguage } from './i18n.js';
-import { normalizeSearch, friendSearchText, matchesSearch, activityComparison } from './view-query.js';
-import { ActionToast } from './toast.js';
-import { patchElement, patchMarkup } from './dom.js';
-import { ImagePool, ImageController } from './images.js';
-import { formatActivityDateTime, uiText } from './ui-format.js';
-import { CONFIG, PERMISSIONS, SORTS, TABS } from './config.js';
-import { JsonStorage } from './storage.js';
-import { DataRepository, VrchatApiClient } from './api.js';
-import { InstanceHydrationController } from './hydration.js';
-import {
-  buildLocations,
-  classifyPermission,
-  createFriendLocationMap,
-  deriveCanJoin,
-  effectiveInstanceUserCount,
-  escapeHtml,
-  filterAndSortInstances,
-  friendIsOnline,
-  friendStateText,
-  instanceOwnerId,
-  mergeInstanceData,
-  needsNonFriendOwnerProfile,
-  nonFriendOwnerForEntry,
-  normalizeFriends,
-  normalizeUser,
-  onlineStatusInfo,
-  permissionBadgeClass,
-  permissionLabel,
-  participantsForEntry,
-  resolveFriendLocation,
-  regionLabel,
-  sortParticipants,
-  uniqueUsers,
-  safeImageUrl,
-  sizedImageUrl,
-} from './domain.js';
+import { createViews } from "./views.js";
+import { createSettings } from "./settings.js";
+import { NotificationImageSaver } from "./notification-image-saver.js";
+import { notificationPanelMaxHeight } from "./notification-layout.js";
+import { IconFrameCatalog, FrameAnimations, framedAvatar } from "./icon-frames.js";
+import { NotificationLocal, canPinNotification, MEMO_MAX_LENGTH } from "./notification-local.js";
+import { elapsedUpdateLabel } from "./update-time.js";
+import { renderNotificationList } from "./notification-view.js";
+import { diagnosticLog } from "./diagnostics.js";
+import { refreshIsBlocked } from "./refresh-policy.js";
+import { NotificationStore, replySlot, REPLY_MAX_LENGTH, bulkNotificationAction, userId as notificationUserId } from "./notifications.js";
+import { ToolbarLayout } from "./toolbar-layout.js";
+import { readFailureMessage } from "./ui-feedback.js";
+import { WorldCatalog, worldIsUnavailable } from "./world-catalog.js";
+import { fetchRecentWorlds } from "./recent-worlds.js";
+import { WorldFavorites } from "./world-favorites.js";
+import { SidebarResizer } from "./sidebar-resize.js";
+import { t, lt, captureStaticLabels, setLocale, getLocale, relocalize } from "./i18n.js";
+import { normalizeSearch, friendSearchText, matchesSearch, activityComparison } from "./view-query.js";
+import { ActionToast } from "./toast.js";
+import { patchElement, patchMarkup } from "./dom.js";
+import { ImagePool, ImageController } from "./images.js";
+import { formatActivityDateTime } from "./ui-format.js";
+import { CONFIG, PERMISSIONS, SORTS, TABS } from "./config.js";
+import { JsonStorage } from "./storage.js";
+import { DataRepository, VrchatApiClient } from "./api.js";
+import { InstanceHydrationController } from "./hydration.js";
+import { buildLocations, classifyPermission, createFriendLocationMap, deriveCanJoin, escapeHtml, filterAndSortInstances, friendIsOnline, instanceOwnerId, mergeInstanceData, needsNonFriendOwnerProfile, nonFriendOwnerForEntry, normalizeFriends, onlineStatusInfo, permissionLabel, participantsForEntry, resolveFriendLocation, sortParticipants, safeImageUrl, sizedImageUrl } from "./domain.js";
 
 const elements = {
   status: document.getElementById('status'),
@@ -60,23 +45,36 @@ const elements = {
   offlineSearchStatus: document.getElementById('offlineSearchStatus'),
   sort: document.getElementById('sort'),
   offlineSort: document.getElementById('offlineSort'),
+  showIconFrames: document.getElementById('showIconFrames'),
   showNonFriendOwners: document.getElementById('showNonFriendOwners'),
   settingsButton: document.getElementById('settingsButton'),
   settingsPanel: document.getElementById('settingsPanel'),
+  settingsMore: document.getElementById('settingsMore'),
+  settingsAdvanced: document.getElementById('settingsAdvanced'),
+  backToTop: document.getElementById('backToTop'),
   friendSort: document.getElementById('friendSort'),
   instanceDisplay: document.getElementById('instanceDisplay'),
   autoRefresh: document.getElementById('autoRefresh'),
   reloadButton: document.getElementById('reloadButton'),
   recentButton: document.getElementById('recentButton'),
+  notificationsButton: document.getElementById('notificationsButton'),
+  notificationCount: document.getElementById('notificationCount'),
+  notificationPanel: document.getElementById('notificationPanel'),
   clearCacheButton: document.getElementById('clearCacheButton'),
+  copyDiagnosticButton: document.getElementById('copyDiagnosticButton'),
+  copyStatusDiagnostic: document.getElementById('copyStatusDiagnostic'),
   actionToast: document.getElementById('actionToast'),
   friendInstancePreview: document.getElementById('friendInstancePreview'),
   favoriteMenu: document.getElementById('favoriteMenu'),
 };
 
 const uiStorage = new JsonStorage();
-let repository = new DataRepository(new VrchatApiClient(), uiStorage);
+const notificationLocal=new NotificationLocal(uiStorage,{onChange:()=>renderNotificationPanel()});
+const iconFrames=new IconFrameCatalog();
+let repository = new DataRepository(new VrchatApiClient(CONFIG.API_BASE,{onAccountChanged:handleAccountChanged}), uiStorage);
 let worldFavorites = null;
+let notifications=null, notificationBusy=false, notificationReply=null, notificationBulk=null;
+let notificationMemoComposing=false;
 let worldCatalog = new WorldCatalog();
 let worldView = { selected: 'recent', loading: false, error: null, token: 0, editor: null };
 
@@ -108,9 +106,10 @@ const state = {
   instanceDisplay: 'normal',
   friendSort: 'favorite_list',
   offlineSort: 'name',
+  showIconFrames: false,
   showNonFriendOwners: false,
   displayLimits: new Map(),
-  theme: 'dark-blue',
+  theme: 'ash',
   autoRefreshMinutes: 0,
   autoRefreshTimer: null,
   sidebarMode: 'normal',
@@ -144,6 +143,8 @@ const state = {
   },
   dataFromCache: false,
   lastLoadedAt: 0,
+  updatedTimeMode: 'relative',
+  settingsAdvancedExpanded: false,
   collapsedFriendGroups: new Set(['ungrouped', 'ungrouped-offline']),
   privateCollapsed: true,
   friendPreview: {
@@ -173,232 +174,104 @@ const sidebarResizer = new SidebarResizer({
   onCommit: () => persistUiPreferences(),
 });
 
-function readUiPreferences() {
-  const prefs = uiStorage.get(CONFIG.UI_PREFERENCES_KEY, {});
-  return prefs && typeof prefs === 'object' && !Array.isArray(prefs) ? prefs : {};
-}
 
-function persistUiPreferences() {
-  uiStorage.set(CONFIG.UI_PREFERENCES_KEY, {
-    language: getLocale(),
-    viewMode: state.viewMode,
-    tab: state.tab,
-    sort: state.sort,
-    friendViewSort: state.friendViewSort,
-    instanceSize: state.instanceSize,
-    instanceDisplay: state.instanceDisplay,
-    friendSort: state.friendSort,
-    offlineSort: state.offlineSort,
-    showNonFriendOwners: state.showNonFriendOwners,
-    theme: state.theme,
-    autoRefreshMinutes: state.autoRefreshMinutes,
-    sidebarWidths: sidebarResizer.preferences(),
-    sidebarMode: state.sidebarMode,
-    sidebarCollapsed: state.sidebarMode === 'hidden',
-    friendFilter: elements.friendFilter?.value || 'all',
-    showOnWebsite: elements.showOnWebsite?.checked !== false,
-    showOffline: elements.showOffline?.checked === true,
-  });
-}
+const {
+  readUiPreferences,
+  persistUiPreferences,
+  restoreUiPreferences,
+  updateInstanceSizeButtons,
+  applyInstanceSize,
+  applyInstanceDisplay,
+  syncFriendLocationTips,
+  updateThemeButtons,
+  applyTheme,
+  applySidebarMode,
+  toggleFriendSidebar,
+  positionSettingsPanel,
+  setSettingsAdvanced,
+  setSettingsPanelOpen,
+  toggleSettingsPanel
+} = createSettings({
+  FRIEND_VIEW_SORTS,
+  VIEW_MODES,
+  applyMainSortOptions,
+  closeFavoriteMenu,
+  elements,
+  hideFriendInstancePreview,
+  renderFriendSidebar,
+  setNotificationPanelOpen,
+  sidebarResizer,
+  state,
+  uiStorage,
+});
 
-function restoreUiPreferences() {
-  const prefs = readUiPreferences();
-  setLocale(initialLanguage(prefs.language));
-  sidebarResizer.restore(prefs.sidebarWidths);
-  document.getElementById('language').value = getLocale();
-  state.viewMode = Object.values(VIEW_MODES).includes(prefs.viewMode)
-    ? prefs.viewMode
-    : VIEW_MODES.INSTANCES;
-  state.tab = Object.values(TABS).includes(prefs.tab) ? prefs.tab : TABS.FAVORITE_PLUS;
-  state.sort = Object.values(SORTS).includes(prefs.sort) ? prefs.sort : SORTS.FRIENDS_DESC;
-  state.friendViewSort = Object.values(FRIEND_VIEW_SORTS).includes(prefs.friendViewSort)
-    ? prefs.friendViewSort
-    : FRIEND_VIEW_SORTS.NAME;
-  state.instanceSize = ['small', 'medium', 'large'].includes(prefs.instanceSize)
-    ? prefs.instanceSize
-    : 'medium';
-  state.instanceDisplay = ['simple', 'normal'].includes(prefs.instanceDisplay)
-    ? prefs.instanceDisplay
-    : 'normal';
-  state.friendSort = ['name', 'favorite_list'].includes(prefs.friendSort)
-    ? prefs.friendSort
-    : 'favorite_list';
-  if (prefs.theme === 'sage') prefs.theme = 'mist';
-  state.theme = ['light', 'sand', 'mist', 'ash', 'dark-blue', 'dark'].includes(prefs.theme)
-    ? prefs.theme
-    : 'dark-blue';
-  state.autoRefreshMinutes = [5, 10, 30].includes(Number(prefs.autoRefreshMinutes))
-    ? Number(prefs.autoRefreshMinutes)
-    : 0;
-  state.sidebarMode = ['normal', 'location', 'hidden'].includes(prefs.sidebarMode)
-    ? prefs.sidebarMode
-    : prefs.sidebarCollapsed === true
-      ? 'hidden'
-      : 'normal';
-  state.offlineSort = ['name', 'recent', 'oldest'].includes(prefs.offlineSort) ? prefs.offlineSort : 'name';
-  if (elements.offlineSort) elements.offlineSort.value = state.offlineSort;
-  state.showNonFriendOwners = prefs.showNonFriendOwners === true;
-  if (elements.showNonFriendOwners) elements.showNonFriendOwners.checked = state.showNonFriendOwners;
-  applyInstanceSize();
-  applyInstanceDisplay();
-  applyTheme();
-  applySidebarMode();
-  if (elements.friendSort) elements.friendSort.value = state.friendSort;
-  if (elements.instanceDisplay) elements.instanceDisplay.value = state.instanceDisplay;
-  if (elements.autoRefresh) elements.autoRefresh.value = String(state.autoRefreshMinutes);
-  if (elements.friendFilter) {
-    const requestedFilter = ['all', 'favorite', 'joinable'].includes(prefs.friendFilter)
-      || (typeof prefs.friendFilter === 'string' && prefs.friendFilter.startsWith('favorite-group:'))
-      ? prefs.friendFilter
-      : 'favorite';
-    state.requestedFriendFilter = requestedFilter;
-    if ([...elements.friendFilter.options].some((option) => option.value === requestedFilter)) {
-      elements.friendFilter.value = requestedFilter;
-    } else {
-      elements.friendFilter.value = 'favorite';
-    }
-  }
-  if (elements.showOnWebsite) {
-    elements.showOnWebsite.checked = typeof prefs.showOnWebsite === 'boolean'
-      ? prefs.showOnWebsite
-      : false;
-  }
-  if (elements.showOffline) elements.showOffline.checked = typeof prefs.showOffline === 'boolean' ? prefs.showOffline : prefs.showOfflineFavorites === true;
-  applyMainSortOptions();
-}
+const {
+  renderFriendSidebarLocationThumbnail,
+  renderFriendSidebarItem,
+  renderRecentWorlds,
+  reverseEntryForFriend,
+  friendLocationLabel,
+  friendLocationSortKey,
+  sortReverseFriends,
+  getReverseFriendGroups,
+  renderFriendLocationPlaceholderIcon,
+  renderFriendLocationItem,
+  renderFavoriteGroupEditor,
+  renderFriendLocationView,
+  renderUngroupedOfflineSection,
+  buildInstanceLaunchUrl,
+  buildWorldUrl,
+  buildUserProfileUrl,
+  renderSummaryPeopleIcon,
+  ownerDisplayState,
+  renderParticipantList,
+  renderPrivateInstance,
+  renderInstanceCard
+} = createViews({
+  FRIEND_VIEW_SORTS,
+  VIEW_MODES,
+  compareFriendNames,
+  compareOfflineFriends,
+  displayImageUrl,
+  elements,
+  friendAvatarUrl,
+  friendMap,
+  instanceIsHighlighted,
+  limitedMarkup,
+  needsHydration,
+  renderFavoriteActionButton,
+  renderFramedAvatar,
+  renderWorldFavoriteButton,
+  state,
+  getRepository: () => repository,
+  getWorldFavorites: () => worldFavorites,
+  getWorldCatalog: () => worldCatalog,
+  getWorldView: () => worldView,
+});
 
-function updateInstanceSizeButtons() {
-  document.querySelectorAll('.instance-size-button').forEach((button) => {
-    const active = button.dataset.instanceSize === state.instanceSize;
-    button.classList.toggle('active', active);
-    button.setAttribute('aria-pressed', String(active));
-  });
-}
-
-function applyInstanceSize() {
-  const size = ['small', 'medium', 'large'].includes(state.instanceSize)
-    ? state.instanceSize
-    : 'medium';
-  state.instanceSize = size;
-  document.body.dataset.instanceSize = size;
-  updateInstanceSizeButtons();
-}
-
-function applyInstanceDisplay() {
-  const display = ['simple', 'normal'].includes(state.instanceDisplay)
-    ? state.instanceDisplay
-    : 'normal';
-  state.instanceDisplay = display;
-  document.body.dataset.instanceDisplay = display;
-  if (elements.instanceDisplay) elements.instanceDisplay.value = display;
-  syncFriendLocationTips();
-}
-
-function syncFriendLocationTips() {
-  elements.list?.querySelectorAll('.friend-location-item [data-friend-tip]').forEach(element => {
-    if (state.instanceDisplay === 'simple') element.removeAttribute('title');
-    else element.setAttribute('title', element.dataset.friendTip);
-  });
-}
-
-function updateThemeButtons() {
-  document.querySelectorAll('.theme-button').forEach((button) => {
-    const active = button.dataset.theme === state.theme;
-    button.classList.toggle('active', active);
-    button.setAttribute('aria-checked', String(active));
-  });
-}
-
-function applyTheme() {
-  const theme = ['light', 'sand', 'mist', 'ash', 'dark-blue', 'dark'].includes(state.theme)
-    ? state.theme
-    : 'dark-blue';
-  state.theme = theme;
-  document.documentElement.dataset.theme = theme;
-  document.body.dataset.theme = theme;
-  document.documentElement.style.colorScheme = ['light', 'sand', 'mist'].includes(theme) ? 'light' : 'dark';
-  updateThemeButtons();
-}
-
-function applySidebarMode() {
-  const mode = ['normal', 'location', 'hidden'].includes(state.sidebarMode)
-    ? state.sidebarMode
-    : 'normal';
-  state.sidebarMode = mode;
-  const hidden = mode === 'hidden';
-  const location = mode === 'location';
-  document.body.classList.toggle('sidebar-collapsed', hidden);
-  document.body.classList.toggle('sidebar-location-mode', location);
-  sidebarResizer.apply();
-  if (!elements.sidebarToggle) return;
-  elements.sidebarToggle.textContent = hidden ? '›' : location ? '‹' : '»';
-  elements.sidebarToggle.setAttribute('aria-expanded', String(!hidden));
-  const label = hidden
-    ? t('フレンド一覧を表示')
-    : location
-      ? t('フレンド一覧を隠す')
-      : t('今居るインスタンスも表示');
-  elements.sidebarToggle.setAttribute('aria-label', label);
-  elements.sidebarToggle.title = label;
-  elements.sidebarToggle.dataset.sidebarMode = mode;
-}
-
-function toggleFriendSidebar() {
-  state.sidebarMode = state.sidebarMode === 'normal'
-    ? 'location'
-    : state.sidebarMode === 'location'
-      ? 'hidden'
-      : 'normal';
-  hideFriendInstancePreview({ immediate: true });
-  closeFavoriteMenu();
-  applySidebarMode();
-  renderFriendSidebar();
-  persistUiPreferences();
-}
-
-function positionSettingsPanel() {
-  if (!elements.settingsPanel || elements.settingsPanel.classList.contains('hidden')) return;
-  const button = elements.settingsButton.getBoundingClientRect();
-  const scale = button.width / elements.settingsButton.offsetWidth || 1;
-  const margin = 12;
-  elements.settingsPanel.style.width = `${Math.min(350, (window.innerWidth - margin * 2) / scale)}px`;
-  elements.settingsPanel.style.right = `${margin / scale}px`;
-  const top = Math.min(button.bottom + 7 * scale, window.innerHeight - 80);
-  elements.settingsPanel.style.top = `${Math.max(margin, top) / scale}px`;
-  elements.settingsPanel.style.maxHeight = `${(window.innerHeight - Math.max(margin, top) - margin) / scale}px`;
-}
 window.addEventListener('resize', positionSettingsPanel);
-function setSettingsPanelOpen(open) {
-  if (!elements.settingsPanel || !elements.settingsButton) return;
-  elements.settingsPanel.classList.toggle('hidden', !open);
-  elements.settingsButton.setAttribute('aria-expanded', String(open));
-  if (open) positionSettingsPanel();
-}
 
-function toggleSettingsPanel() {
-  const open = elements.settingsPanel?.classList.contains('hidden') !== false;
-  setSettingsPanelOpen(open);
+function automaticRefreshBlocked() {
+  return Boolean(document.activeElement?.matches?.('[data-notification-memo]')) || refreshIsBlocked({loading:state.loading || worldView.loading || state.recent.loading, favoriteMutationPending:state.favoriteMutationPending, pendingInvites:state.pendingInvites.size, notificationBusy, friendEditor:state.favoriteGroupEditor, worldEditor:worldView.editor, notificationReply});
 }
-
+function resumeAutoRefresh() { if(state.autoRefreshDueAt)scheduleAutoRefresh({preserveDue:true}); }
 function clearAutoRefreshTimer() {
   if (!state.autoRefreshTimer) return;
   clearTimeout(state.autoRefreshTimer);
   state.autoRefreshTimer = null;
 }
 
-function scheduleAutoRefresh({ preserveDue = false } = {}) {
+function scheduleAutoRefresh({ preserveDue = false, deferMs = 0 } = {}) {
   clearAutoRefreshTimer();
   if (![5, 10, 30].includes(state.autoRefreshMinutes)) { state.autoRefreshDueAt = 0; return; }
   if (!preserveDue || !state.autoRefreshDueAt) state.autoRefreshDueAt = Date.now() + state.autoRefreshMinutes * 60000;
   if (document.hidden) return;
-  const delayMs = Math.max(0, state.autoRefreshDueAt - Date.now());
+  const delayMs = Math.max(deferMs, state.autoRefreshDueAt - Date.now());
   state.autoRefreshTimer = setTimeout(async () => {
     state.autoRefreshTimer = null;
     if (document.hidden) return;
-    if (state.loading || state.favoriteMutationPending || state.pendingInvites.size
-      || (state.viewMode === VIEW_MODES.FRIENDS && state.favoriteGroupEditor)) {
-      state.autoRefreshDueAt = Date.now() + 1000;
-      scheduleAutoRefresh({ preserveDue: true });
+    if (automaticRefreshBlocked()) {
+      scheduleAutoRefresh({ preserveDue: true, deferMs: 1000 });
       return;
     }
     // Anchor the next deadline to this start, not the fetch completion.
@@ -586,7 +459,7 @@ function renderFavoriteActionButton(userId, extraClass = '') {
   if (!userId || !state.friendIndex.has(userId)) return '';
   const isFavorite = state.favorites.has(userId);
   const label = isFavorite ? t('Favoriteを編集') : t('Favoriteに追加');
-  return `<button class="favorite-action-button favorite-badge${isFavorite ? ' is-favorite' : ''}${extraClass ? ` ${extraClass}` : ''}" type="button" data-favorite-user-id="${escapeHtml(userId)}" aria-label="${label}" title="${label}"><span class="favorite-action-symbol" aria-hidden="true">${isFavorite ? '★' : ''}</span></button>`;
+  return `<button class="favorite-action-button favorite-badge${isFavorite ? ' is-favorite' : ''}${extraClass ? ` ${extraClass}` : ''}" type="button" data-favorite-user-id="${escapeHtml(userId)}" aria-haspopup="menu" aria-expanded="false" aria-controls="favoriteMenu" aria-label="${label}" title="${label}"><span class="favorite-action-symbol" aria-hidden="true">${isFavorite ? '★' : ''}</span></button>`;
 }
 
 function renderFriendFilterOptions() {
@@ -622,11 +495,24 @@ function setStatus(message, error = false) {
   elements.status.textContent = text;
   elements.status.classList.toggle('error', Boolean(error));
   elements.statusRow?.classList.toggle('hidden', !text);
+  if(elements.copyStatusDiagnostic)elements.copyStatusDiagnostic.hidden=!error || !diagnosticLog.events.length;
 }
 
 const actionToast = new ActionToast(elements.actionToast);
 function hideActionToast() { actionToast.dismiss(); state.favoriteUndo = null; }
-function showActionToast(message, options = {}) { actionToast.show(message, options); }
+function diagnosticText() {
+  const manifest=globalThis.chrome?.runtime?.getManifest?.() || {};
+  return JSON.stringify(diagnosticLog.snapshot({version:manifest.version_name || manifest.version || '1.6.6.3',language:getLocale(),theme:state.theme,view:state.viewMode,counts:{friends:state.friends.length,instances:state.instances.length,notifications:notifications?.rows.length || 0}}),null,2);
+}
+async function copyDiagnostics() {
+  try { await navigator.clipboard.writeText(diagnosticText()); showActionToast(t('診断情報をコピーしました。')); }
+  catch { showActionToast(t('コピーできませんでした。もう一度お試しください。'),{error:false}); }
+}
+function recordNotificationFailure(operation,error) { diagnosticLog.record('notifications-'+operation,error); }
+function showActionToast(message, options = {}) {
+  if(options.error && !diagnosticLog.events.length)diagnosticLog.record('ui',{});
+  actionToast.show(message, {...options,copyError:options.error?copyDiagnostics:null});
+}
 
 function applyMainSortOptions() {
   if (!elements.sort) return;
@@ -651,6 +537,8 @@ function applyMainSortOptions() {
 }
 
 function updateTabButtons() {
+  updateNotificationBadge();
+
   elements.recentButton?.classList.toggle('active', state.viewMode === VIEW_MODES.RECENT);
   elements.recentButton?.setAttribute('aria-pressed', String(state.viewMode === VIEW_MODES.RECENT));
   document.querySelectorAll('.tab').forEach((button) => {
@@ -801,7 +689,21 @@ const imagePool = new ImagePool({ fallbackFor: url => imageFallbacks.get(url) ||
   timeoutMs: CONFIG.IMAGE_TIMEOUT_MS, minIntervalMs: CONFIG.IMAGE_MIN_INTERVAL_MS,
   getScope: () => state.user?.id || '' });
 const imageController = new ImageController(imagePool, document.body, {preloadPx:CONFIG.IMAGE_PRELOAD_PX});
+const frameAnimations=new FrameAnimations(document.body);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)void ensureIconFrames();});
 
+async function ensureIconFrames(){
+  if(!state.showIconFrames||!state.user||state.loading||document.hidden||iconFrames.ready||iconFrames.failed||iconFrames.inflight)return;
+  const account=state.user.id,repo=repository;
+  try{await iconFrames.load(repo.api,account);if(state.showIconFrames&&state.user?.id===account&&repo===repository){render({resetScroll:false});renderNotificationPanel();if(state.friendPreview.location)renderFriendInstancePreview(getCurrentInstanceEntry(state.friendPreview.location));}}
+  catch{if(state.showIconFrames&&state.user?.id===account)showActionToast(t('アイコンフレームを取得できませんでした。'),{error:true});}
+}
+function renderFramedAvatar(user,markup){
+  if(!state.showIconFrames||!user)return markup;
+  const known=state.friendIndex.get(user.id)||cachedOfflineProfile(user.id);
+  const id=typeof user.iconFrame==='string'?user.iconFrame:known?.iconFrame;
+  return framedAvatar(markup,iconFrames.assets(id));
+}
 function friendAvatarUrl(friend) {
   return displayImageUrl(
     friend.profilePicOverride
@@ -810,88 +712,6 @@ function friendAvatarUrl(friend) {
       || friend.iconUrl
       || '',
   );
-}
-
-function renderFriendSidebarLocationThumbnail(friend) {
-  const status = onlineStatusInfo(friend);
-  const location = resolveFriendLocation(friend);
-  const entry = reverseEntryForFriend(friend);
-  const permission = entry?.permission || classifyPermission(location);
-  const isWebsite = status.className === 'online-website';
-  const isPrivate = permission === PERMISSIONS.PRIVATE || location === 'private';
-  const permissionClass = permissionBadgeClass(permission);
-
-  const worldName = friendLocationLabel(friend, entry);
-  const groupName = entry?.groupName || entry?.instanceData?.group?.name || entry?.instanceData?.groupName || '';
-  const locationTitle = groupName ? `${worldName} / ${groupName}` : worldName;
-
-  let countText = '';
-  if (entry && !isPrivate && !isWebsite) {
-    const userCount = effectiveInstanceUserCount(entry, friendMap());
-    const capacity = entry.world?.capacity ?? entry.capacity ?? entry.world?.hardCapacity;
-    const friendCount = uniqueUsers(entry.friends).length;
-    countText = `${friendCount}/${userCount}/${Number.isFinite(capacity) ? capacity : '-'}`;
-  }
-
-  const thumb = entry && !isPrivate && !isWebsite
-    ? displayImageUrl(entry.world?.thumbnailImageUrl || entry.instanceData?.world?.thumbnailImageUrl || entry.instanceData?.world?.imageUrl || '', 'world')
-    : '';
-  const thumbContent = thumb
-    ? `<img class="friend-sidebar-location-thumb-image" data-image-src="${escapeHtml(thumb)}" loading="lazy" decoding="async" alt="">`
-    : `<div class="friend-sidebar-location-thumb-placeholder friend-location-thumb-placeholder">${renderFriendLocationPlaceholderIcon({ isPrivate, isWebsite })}</div>`;
-  const statusText = isWebsite
-    ? 'OtherPlatform'
-    : isPrivate
-      ? 'Private'
-      : permissionLabel(permission);
-
-  return `
-    <div class="friend-sidebar-location-thumb" title="${escapeHtml(locationTitle)}">
-      ${thumbContent}
-      <div class="friend-sidebar-location-meta">
-        <span class="friend-state friend-sidebar-location-status ${permissionClass}">${escapeHtml(statusText)}</span>
-        ${countText ? lt`<span class="friend-sidebar-location-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(countText)}</span>` : ''}
-      </div>
-      <div class="friend-sidebar-location-title">${escapeHtml(locationTitle)}</div>
-    </div>`;
-}
-
-function renderFriendSidebarItem(friend) {
-  const name = friend.displayName || friend.username || friend.id;
-  const status = onlineStatusInfo(friend);
-  const location = resolveFriendLocation(friend);
-  const entry = reverseEntryForFriend(friend);
-  const permission = entry?.permission || classifyPermission(location);
-  const isWebsite = status.className === 'online-website';
-  const isPrivate = permission === PERMISSIONS.PRIVATE || location === 'private';
-  const avatarUrl = friendAvatarUrl(friend);
-  const avatar = avatarUrl
-    ? `<img class="friend-avatar" data-image-src="${escapeHtml(avatarUrl)}" loading="lazy" decoding="async" alt="">`
-    : '<div class="friend-avatar"></div>';
-  const showLocation = state.sidebarMode === 'location';
-  const locationData = !isWebsite && !isPrivate && location && location !== 'offline'
-    ? ` data-location="${escapeHtml(entry?.location || location)}"`
-    : '';
-  const loadingClass = showLocation && entry && needsHydration(entry)
-    ? ' friend-sidebar-location-loading'
-    : '';
-  const noPreviewClass = !friendIsOnline(friend) || isWebsite || isPrivate ? ' friend-sidebar-no-preview' : '';
-
-  return `
-    <div class="friend-item${loadingClass}${noPreviewClass}${!friendIsOnline(friend) ? ' friend-offline' : ''}" data-friend-id="${escapeHtml(friend.id)}"${locationData} tabindex="0" role="button" aria-label="${escapeHtml(name)}">
-      <div class="friend-avatar-wrap">
-        ${avatar}
-        ${renderFavoriteActionButton(friend.id)}
-      </div>
-      <div class="friend-copy">
-        <div class="friend-name">
-          <span class="online-dot ${status.className}" title="${escapeHtml(status.label)}" aria-label="${escapeHtml(status.label)}">●</span>
-          <span class="friend-name-text" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
-        </div>
-        <div class="friend-state ${permissionBadgeClass(permission)}">${escapeHtml(friendStateText(friend))}</div>
-      </div>
-      ${showLocation ? renderFriendSidebarLocationThumbnail(friend) : ''}
-    </div>`;
 }
 
 function disconnectSidebarHydrationObserver() {
@@ -967,6 +787,7 @@ function renderFriendSidebar() {
   patchMarkup(elements.friendList, limitedMarkup(rows, 'sidebar', renderFriendSidebarItem));
   if (state.friendPreview.anchor?.classList.contains('friend-item')) validateFriendInstancePreview();
   elements.friendList.scrollTop = previousScroll;
+  syncFavoriteMenuHighlight();
   scheduleSidebarHydrationSync();
 }
 
@@ -986,6 +807,7 @@ function replaceSidebarLocationCardsInDom(entry) {
     if (replacement) patchElement(node, replacement);
   });
   elements.friendList.scrollTop = scrollTop;
+  syncFavoriteMenuHighlight();
   scheduleSidebarHydrationSync();
 }
 
@@ -1019,6 +841,7 @@ async function loadRecentWorldsUnshared({ force = false, onFirstPage = () => {} 
   let firstPage = true;
   try {
     const rows = await fetchRecentWorlds(api, {
+      account,
       shouldContinue:()=>current() && state.viewMode===VIEW_MODES.RECENT && worldView.selected==='recent',
       onProgress:rows=>{
         if(!current())return;
@@ -1117,27 +940,167 @@ function paintWorldProgress(){
   const section=elements.list.querySelector('.recent-worlds');if(!section)return;
   const template=document.createElement('template');template.innerHTML=renderRecentWorlds();
   patchElement(section,template.content.firstElementChild);
+  syncFavoriteMenuHighlight();updateBackToTop();
 }
-function renderRecentWorlds() {
-  const recent=state.recent, groups=worldFavorites?.groups||[], selected=worldView.selected;
-  const group=groups.find(g=>g.key===selected), isRecent=selected==='recent';
-  const rows=isRecent?recent.rows:(worldFavorites?.members(selected)||[]).map(id=>worldCatalog.worlds.get(id)||repository.getCachedWorld(id)||{id,pending:worldView.loading,loadFailed:!worldView.loading&&Boolean(worldView.error),unavailable:!worldView.loading&&!worldView.error});
-  const notice=worldView.loading?t('ワールドを読み込み中…'):worldView.error?readFailureMessage(isRecent?'worldFavorites':'worlds',worldView.error)
-    :isRecent?(recent.loading?t('訪問ワールドを読み込み中…'):recent.error?readFailureMessage('recent',recent.error):worldFavorites?.inflight?t('ワールドFavoriteを確認中…'):recent.ready&&!rows.length?t('最近訪問したワールドはありません。'):'')
-    :worldFavorites?.inflight?t('ワールドFavoriteを確認中…'):!rows.length?t('このリストにはワールドがありません。'):'';
-  const editor=worldView.editor;
-  const edit=editor&&editor.key===selected?`<form class="world-list-editor" data-world-list-editor aria-busy="${editor.saving}"><label>${escapeHtml(t('リスト名'))} <input class="world-list-name" maxlength="20" value="${escapeHtml(editor.draft)}"${editor.saving?' disabled':''}></label><span class="world-name-count">${editor.draft.length} / 20</span><button type="submit"${editor.saving||editor.unknown?' disabled':''}>${escapeHtml(t('保存'))}</button><button type="button" data-world-edit-cancel${editor.saving?' disabled':''}>${escapeHtml(t('キャンセル'))}</button><div role="status">${escapeHtml(editor.saving?t('リスト名を保存しています(少し時間が掛かります)…'):editor.error?t(editor.error):'')}</div></form>`:'';
-  return `<section class="recent-worlds" aria-label="${escapeHtml(t('ワールド管理'))}"><div class="world-tabs" role="tablist" aria-label="${escapeHtml(t('ワールドリスト'))}">
-    <button type="button" role="tab" aria-selected="${isRecent}" data-world-tab="recent">${escapeHtml(t('足跡'))}</button>${groups.map((g,i)=>`<button type="button" role="tab" aria-selected="${g.key===selected}" data-world-tab="${escapeHtml(g.key)}" title="${escapeHtml(g.label)}">★${i+1} ${escapeHtml(g.label)} <span class="world-list-count">(${worldFavorites.members(g.key).length})</span></button>`).join('')}</div>
-    ${group?`<div class="world-list-heading"><h2 title="${escapeHtml(group.label)}">${escapeHtml(group.label)}</h2><button type="button" data-world-edit title="${escapeHtml(t('リスト名を変更'))}" aria-label="${escapeHtml(t('リスト名を変更'))}"${state.favoriteMutationPending?' disabled':''}><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m4 13 9-9 3 3-9 9-4 1zM11 6l3 3"/></svg></button></div>`:`<div class="world-list-heading"><h2>${escapeHtml(t('足跡'))}</h2></div>`}${edit}
-    <div class="recent-notice" role="status">${escapeHtml(notice)}</div><div class="recent-world-grid">${rows.map(world=>{
-      const unavailable=worldIsUnavailable(world);
-      const thumb=unavailable?'':displayImageUrl(world.thumbnailImageUrl||world.imageUrl||'','world'), platforms=unavailable?null:worldPlatforms(world), name=unavailable?t('情報取得不可'):world.loadFailed?t('読み込み失敗'):world.name||t('ワールド情報を取得中…');
-      const placeholder=unavailable?`<div class="thumb thumb-placeholder world-unavailable"><span class="world-unavailable-icon" aria-hidden="true">⌕</span><span>World Currently<br>Unavailable</span></div>`:'<div class="thumb thumb-placeholder"></div>';
-      return `<article class="recent-world-card" data-world-id="${escapeHtml(world.id)}"><div class="thumb-wrap has-world-favorite"><a class="world-page-link" href="${escapeHtml(buildWorldUrl({worldId:world.id}))}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(t('ワールドページを開く'))}">${thumb?`<img class="thumb" data-image-src="${escapeHtml(thumb)}" alt="" loading="eager" decoding="async">`:placeholder}</a>${renderWorldFavoriteButton(world.id)}<span class="world-platforms" title="${escapeHtml(t('対応環境'))}">${escapeHtml(platforms?.length?platforms.join(' / '):t('対応環境不明'))}</span><button type="button" class="world-copy" data-copy-url="${escapeHtml(buildWorldUrl({worldId:world.id}))}" title="${escapeHtml(t('ワールドURLをコピー'))}" aria-label="${escapeHtml(t('ワールドURLをコピー'))}"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="6" width="11" height="11" rx="1.5"/><path d="M13 6V3H3v10h3"/></svg></button></div>
-      <div class="recent-world-name"><span title="${escapeHtml(name)}">${escapeHtml(name)}</span></div><div class="recent-world-author"><span title="${escapeHtml(unavailable||world.pending?world.id:world.authorName||t('作者不明'))}">${escapeHtml(unavailable||world.pending?world.id:world.authorName||t('作者不明'))}</span></div></article>`;
-    }).join('')}</div></section>`;
+const notificationProfileReads=new Map(), notificationProfileFailures=new Set();
+let notificationProfileFrame=null;
+function notificationSenderProfile(row){
+  const id=row.senderUserId;
+  const known=state.friendIndex.get(id)||state.offlineProfiles.get(id);
+  if(known&&friendAvatarUrl(known))return known;
+  if(repository.currentUserId===state.user?.id){const cached=repository.cachedUserProfile(id);if(cached)return cached;}
+  return known||null;
 }
+function notificationGroupProfile(row){
+  const id=row.data?.groupId;
+  if(repository.currentUserId!==state.user?.id||!/^grp_[0-9a-f-]+$/i.test(id||''))return null;
+  return repository.groupCache?.getRecord(id,CONFIG.GROUP_CACHE_TTL_MS,CONFIG.GROUP_FAILURE_CACHE_TTL_MS)?.data||null;
+}
+function scheduleNotificationProfiles(){
+  if(notificationProfileFrame!==null)return;
+  notificationProfileFrame=requestAnimationFrame(()=>{notificationProfileFrame=null;hydrateNotificationProfiles();});
+}
+function hydrateNotificationProfiles(){
+  const panel=elements.notificationPanel;
+  if(panel.classList.contains('hidden')||document.hidden||state.loading||repository.disposed||!state.user||repository.currentUserId!==state.user.id)return;
+  const bounds=(panel.querySelector('.notification-view')||panel).getBoundingClientRect();
+  for(const tile of panel.querySelectorAll('[data-notification-user-id],[data-notification-group-id]')){
+    if(notificationProfileReads.size>=2)break;
+    const groupId=tile.dataset.notificationGroupId,id=groupId||tile.dataset.notificationUserId,rect=tile.getBoundingClientRect();
+    const valid=groupId?/^grp_[0-9a-f-]+$/i.test(id||''):notificationUserId(id);
+    if(rect.bottom<bounds.top||rect.top>bounds.bottom||!valid||notificationProfileReads.has(id)||notificationProfileFailures.has(id))continue;
+    const row=notifications?.rows.find(r=>groupId?r.version===2&&r.data?.groupId===id:['friendRequest','invite'].includes(r.type)&&r.senderUserId===id);
+    if(!row)continue;
+    if(groupId){
+      if(repository.groupCache?.getRecord(id,CONFIG.GROUP_CACHE_TTL_MS,CONFIG.GROUP_FAILURE_CACHE_TTL_MS))continue;
+    }else if(friendAvatarUrl(notificationSenderProfile(row)||{}))continue;
+    const dataRepository=repository,account=state.user.id,entry={};notificationProfileReads.set(id,entry);
+    void (groupId?dataRepository.fetchGroup(id):dataRepository.fetchUser(id)).then(profile=>{
+      if(dataRepository!==repository||account!==state.user?.id)return;
+      if(!profile||!(groupId?safeImageUrl(profile.iconUrl):friendAvatarUrl(profile)))notificationProfileFailures.add(id);
+      renderNotificationPanel();
+    }).catch(()=>{if(dataRepository===repository&&account===state.user?.id)notificationProfileFailures.add(id);}).finally(()=>{
+      if(notificationProfileReads.get(id)===entry)notificationProfileReads.delete(id);scheduleNotificationProfiles();
+    });
+  }
+}
+
+function notificationSnapshotRow(row){
+  const group=notificationGroupProfile(row);
+  return {...row,data:{...row.data,groupName:row.data?.groupName||group?.name||row.senderDisplayName||row.senderUsername||''},savedImageSource:row.imageUrl||group?.iconUrl||''};
+}
+const notificationImageSaves=new NotificationImageSaver({local:notificationLocal,pool:imagePool,imageUrl:displayImageUrl,
+  onError:()=>showActionToast(t('画像を保存できませんでした。本文は保存されています。'),{error:true}),onChange:()=>renderNotificationPanel()});
+function savePinnedNotificationImage(row){notificationImageSaves.save(row);}
+
+function renderNotificationBulk(){
+  if(notificationBulk?.running)return `<div class="notification-bulk" role="status">${escapeHtml(t('一括処理中…'))} ${notificationBulk.done} / ${notificationBulk.total}<button type="button" data-notification-stop>${escapeHtml(t('停止'))}</button></div>`;
+  if(notificationBulk?.confirm)return `<div class="notification-bulk"><p>${escapeHtml(t('取得済みの通知を既読にします。フレンド申請・Group招待などの承認待ちとピン留めした通知は残します。'))}</p><button type="button" data-notification-bulk-confirm>${escapeHtml(t('一括処理する'))}</button><button type="button" data-notification-bulk-cancel>${escapeHtml(t('キャンセル'))}</button></div>`;
+  return `<div class="notification-bulk"><button type="button" data-notification-bulk${notificationBusy||notifications?.loading||state.loading||!notifications?.rows.some(row=>bulkNotificationAction(row)&&!notificationLocal.isPinned(row)&&!notifications.blocked.has(row.id))?' disabled':''}>${escapeHtml(t('すべて既読にする'))}</button></div>`;
+}
+async function processNotificationBulk(){
+  const store=notifications;if(!store||notificationBusy||store.loading||state.loading)return;
+  const rows=store.rows.filter(row=>bulkNotificationAction(row)&&!notificationLocal.isPinned(row)&&!store.blocked.has(row.id));notificationBusy=true;notificationReply=null;notificationBulk={running:true,done:0,total:rows.length,stop:false};renderNotificationPanel();
+  let failed=0,skipped=0;
+  try{for(const row of rows){
+    if(store!==notifications||notificationBulk?.stop)break;
+    const action=bulkNotificationAction(row);
+    if(!action||notificationLocal.isPinned(row)||store.blocked.has(row.id)){skipped++;}else{
+      try{await store.bulkAct(row);}catch(error){failed++;recordNotificationFailure('bulk',error);store.failures.set(row.id,'通知を処理できませんでした。更新して状態を確認してください。');if(error.notificationUncertain||error.outcomeUnknown||[401,429].includes(error.status))break;}
+    }
+    if(store!==notifications)break;notificationBulk.done++;renderNotificationPanel();updateNotificationBadge();
+  }}finally{notificationBusy=false;notificationBulk=null;if(store===notifications){renderNotificationPanel();showActionToast(`${t('一括処理が終了しました。')} ${t('失敗')}: ${failed} / ${t('処理不可')}: ${skipped}`,{error:failed>0,delay:6000});void loadNotifications(true);resumeAutoRefresh();}}
+}
+
+function renderNotificationFooter(){
+  const disabled=!notificationLocal.account?' disabled':'';
+  const toggle=`<button type="button" class="notification-memo-toggle" data-notification-memo-toggle aria-expanded="${notificationLocal.open}" aria-controls="notificationMemoSection" title="${escapeHtml(t(notificationLocal.open?'メモを閉じる':'メモを開く'))}" aria-label="${escapeHtml(t(notificationLocal.open?'メモを閉じる':'メモを開く'))}"${disabled}><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="${notificationLocal.open?'m5 12 5-5 5 5':'m5 8 5 5 5-5'}"/></svg></button>`;
+  const bulk=renderNotificationBulk().replace(/<\/div>$/,toggle+'</div>');
+  const memo=notificationLocal.open?`<div id="notificationMemoSection" class="notification-memo"><div class="notification-memo-input"><textarea aria-label="${escapeHtml(t('メモ'))}" id="notificationMemo" data-notification-memo data-memo-account="${escapeHtml(notificationLocal.account)}" maxlength="${MEMO_MAX_LENGTH}" placeholder="${escapeHtml(t('メモ帳'))}">${escapeHtml(notificationLocal.memo)}</textarea><span data-notification-memo-length>${notificationLocal.memo.length} / ${MEMO_MAX_LENGTH}</span></div><span class="notification-memo-status" data-notification-memo-status role="status">${notificationLocal.saveError?escapeHtml(t('メモを保存できませんでした。')):''}</span></div>`:'';
+  return `<div id="notificationFooter" class="notification-footer">${bulk}${memo}</div>`;
+}
+function saveNotificationMemo(event){
+  const input=event.target;if(!input.matches('[data-notification-memo]')||input.dataset.memoAccount!==notificationLocal.account||notificationLocal.account!==state.user?.id)return;
+  notificationLocal.setMemo(input.value);
+  if(!event.isComposing&&input.value!==notificationLocal.memo)input.value=notificationLocal.memo;
+  elements.notificationPanel.querySelector('[data-notification-memo-length]').textContent=`${notificationLocal.memo.length} / ${MEMO_MAX_LENGTH}`;
+  elements.notificationPanel.querySelector('[data-notification-memo-status]').textContent=notificationLocal.saveError?t('メモを保存できませんでした。'):'';
+  updateNotificationBadge();
+}
+function positionNotificationPanel(){
+  const panel=elements.notificationPanel,button=elements.notificationsButton;
+  if(!panel||panel.classList.contains('hidden'))return;
+  const rect=button.getBoundingClientRect(),scale=rect.width/button.offsetWidth||1,margin=12;
+  const width=Math.min(420,(innerWidth-margin*2)/scale),right=Math.max(margin,Math.min(innerWidth-rect.right,innerWidth-width*scale-margin));
+  const top=Math.max(margin,Math.min(rect.bottom+7*scale,innerHeight-100));
+  panel.style.width=width+'px';panel.style.right=right/scale+'px';panel.style.top=top/scale+'px';panel.style.maxHeight=notificationPanelMaxHeight((innerHeight-top-margin)/scale,notificationLocal.open)+'px';
+}
+function renderNotificationPanel(){
+  const panel=elements.notificationPanel;if(!panel||panel.classList.contains('hidden'))return;
+  const scroll=panel.querySelector('.notification-view')?.scrollTop||0;
+  patchMarkup(panel,`<div class="notification-panel-header"><h2>${escapeHtml(t('通知'))}<span class="notification-header-status" role="status">${notifications?.loading?escapeHtml(t('通知を読み込み中…')):''}</span></h2><div><button type="button" data-notification-refresh title="${escapeHtml(t('最新情報に更新'))}" aria-label="${escapeHtml(t('更新'))}"${notificationBusy||notifications?.loading||state.loading?' disabled':''}>${elements.reloadButton.innerHTML}</button><button type="button" data-notification-close title="${escapeHtml(t('閉じる'))}" aria-label="${escapeHtml(t('閉じる'))}">×</button></div></div>${renderNotifications()}${renderNotificationFooter()}`);
+  const memo=panel.querySelector('[data-notification-memo]');if(memo&&!notificationMemoComposing&&memo.value!==notificationLocal.memo){const start=memo.selectionStart,end=memo.selectionEnd;memo.value=notificationLocal.memo;if(document.activeElement===memo)memo.setSelectionRange(Math.min(start,memo.value.length),Math.min(end,memo.value.length));}
+  positionNotificationPanel();const view=panel.querySelector('.notification-view');if(view)view.scrollTop=scroll;imageController?.sync();scheduleNotificationProfiles();updateReloadButton();
+  for(const row of notificationLocal.saved.values())if((!row.thumbnail||row.thumbnailVersion!==2)&&!elements.notificationPanel.classList.contains('hidden'))savePinnedNotificationImage(row);
+}
+function setNotificationPanelOpen(open,{restoreFocus=false}={}){
+  const panel=elements.notificationPanel;if(!panel)return;
+  panel.classList.toggle('hidden',!open);elements.notificationsButton.setAttribute('aria-expanded',String(open));elements.notificationsButton.classList.toggle('active',open);
+  if(open){notificationRenderLimit=100;setSettingsPanelOpen(false);closeFavoriteMenu();hideFriendInstancePreview({immediate:true});renderNotificationPanel();void loadNotifications(true);panel.querySelector('[data-notification-refresh]')?.focus();}
+  else{notificationReply=null;resumeAutoRefresh();if(restoreFocus)elements.notificationsButton.focus();imageController?.sync();}
+}
+window.addEventListener('resize',positionNotificationPanel);
+document.addEventListener('click',event=>{if(!elements.notificationPanel.classList.contains('hidden')&&!event.composedPath().includes(elements.notificationPanel)&&!event.composedPath().includes(elements.notificationsButton))setNotificationPanelOpen(false);});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!elements.notificationPanel.classList.contains('hidden')){event.preventDefault();event.stopImmediatePropagation();setNotificationPanelOpen(false,{restoreFocus:true});}},true);
+
+function updateNotificationBadge(){
+  const count=elements.notificationCount,button=elements.notificationsButton;if(!count||!button)return;
+  const n=notifications?.rows.length||0;
+  const memo=notificationLocal.hasMemo(),saved=notificationLocal.saved.size>0,localContent=memo||saved;count.hidden=!n&&!localContent;count.classList.toggle('is-memo',!n&&localContent);count.textContent=n?(n>99?'99+':String(n)):'';
+  button.title=button.ariaLabel=t('未処理の通知')+(notifications?.ready?` (${notifications.more?'≥':''}${n})`:'')+(notifications?.error||notifications?.v2Error?` / ${t('一部の通知を取得できていません。')}`:'')+(memo?` / ${t('メモあり')}`:'')+(saved?` / ${t('保存通知あり')}`:'');
+}
+async function loadNotifications(force=false,{retryImages=false}={}){
+  const store=notifications;if(!store||notificationBusy||state.loading)return;
+  if(force)notificationProfileFailures.clear();
+  const task=store.load(force);updateNotificationBadge();renderNotificationPanel();
+  await task;if(store!==notifications)return;if(retryImages)notificationImageSaves.retry();if(!notificationLocal.prune(store.v2.map(notificationSnapshotRow)))showActionToast(t('ピン留めを保存できませんでした。'),{error:true});if(store.error||store.v2Error)recordNotificationFailure('load',store.error||store.v2Error);updateNotificationBadge();renderNotificationPanel();updateReloadButton();
+}
+let notificationRenderLimit=100;
+function renderNotifications(){
+  return renderNotificationList({store:notifications,state,notificationBusy,notificationReply,notificationSenderProfile,buildInstanceLaunchUrl,buildUserProfileUrl,displayImageUrl,friendAvatarUrl,renderLimit:notificationRenderLimit,local:notificationLocal,renderFramedAvatar,notificationGroupProfile});
+}
+
+async function onNotificationClick(event){
+  if(event.target.closest('[data-notification-memo-toggle]')){if(!notificationLocal.account)return;notificationLocal.setOpen(!notificationLocal.open);renderNotificationPanel();if(notificationLocal.open)elements.notificationPanel.querySelector('[data-notification-memo]')?.focus({preventScroll:true});else resumeAutoRefresh();return;}
+  const pin=event.target.closest('[data-notification-pin]');
+  if(pin){if(notificationBusy||state.loading||notifications?.loading||notificationLocal.account!==notifications?.account)return;const row=notificationLocal.rows(notifications?.rows||[]).find(r=>r.id===pin.dataset.notificationPin);if(row&&canPinNotification(row)){if(!notificationLocal.togglePin(notificationSnapshotRow(row)))showActionToast(t('ピン留めを保存できませんでした。'),{error:true});else if(notificationLocal.isPinned(row))savePinnedNotificationImage(row);updateNotificationBadge();renderNotificationPanel();}return;}
+
+  if(event.target.closest('[data-copy-diagnostics]')){void copyDiagnostics();return;}
+  if(event.target.closest('[data-notification-more]')){notificationRenderLimit+=100;renderNotificationPanel();return;}
+  if(event.target.closest('[data-notification-stop]')){if(notificationBulk)notificationBulk.stop=true;return;}
+  if(event.target.closest('[data-notification-bulk-cancel]')){notificationBulk=null;renderNotificationPanel();return;}
+  if(event.target.closest('[data-notification-bulk-confirm]')){void processNotificationBulk();return;}
+  if(event.target.closest('[data-notification-bulk]')){if(!notificationBusy){notificationBulk={confirm:true};renderNotificationPanel();}return;}
+  if(event.target.closest('[data-notification-close]')){setNotificationPanelOpen(false,{restoreFocus:true});return;}
+  if(event.target.closest('[data-notification-refresh]')){if(notificationReply){showActionToast(t('編集を終了してから更新してください。'));return;}void loadNotifications(true,{retryImages:true});return;}
+  const button=event.target.closest('[data-notification-action]');if(!button||elements.notificationPanel.classList.contains('hidden')||notificationBusy||notifications?.loading||state.loading||state.favoriteMutationPending)return;
+  let refreshAfter=false;
+  const store=notifications,row=store?.rows.find(r=>r.id===button.dataset.notificationId);if(!row)return;
+  const action=button.dataset.notificationAction;
+  if(['read','hide'].includes(action)&&notificationLocal.isPinned(row))return;
+  if(action==='cancel-reply'){notificationReply=null;renderNotificationPanel();resumeAutoRefresh();return;}
+  const text=button.closest('.notification-card')?.querySelector('[data-notification-text]')?.value||'';
+  notificationBusy=true;renderNotificationPanel();
+  try{
+    if(action==='verify'){const result=await store.verifyOutcome(row);if(store===notifications)showActionToast(t(result.resolved?'通知が一覧に残っていないことを確認しました。':'状態を確認できません。再送せず公式ページで確認してください。'));}
+    else if(action==='choose-reply'){const rows=await store.replyMessages(row);if(store===notifications)notificationReply={id:row.id,rows,text:''};}
+    else{if(action==='read')await store.readAct(row);else await store.act(row,action,text);store.failures.delete(row.id);refreshAfter=true;if(store===notifications){notificationReply=null;showActionToast(t('通知を処理しました。'));}}
+  }catch(error){
+    if(store===notifications){recordNotificationFailure(action==='choose-reply'?'messages':action,error);store.failures.set(row.id,'通知を処理できませんでした。更新して状態を確認してください。');}
+    if(store===notifications)showActionToast(t(error.notificationUncertain?'操作結果を確認できません。公式ページで確認してください。':error.message==='Reply cooldown'?'変更可能な返信文枠がありません。時間をおいて再試行してください。':error.message==='No current instance'?'招待を送るにはVRChat内の現在地が必要です。':error.status===429?'アクセスが集中しています。少し時間をおいて更新ボタンで再取得してください。':'通知を処理できませんでした。更新して状態を確認してください。'),{error:true,delay:6000});
+  }finally{notificationBusy=false;if(store===notifications){renderNotificationPanel();updateNotificationBadge();if(refreshAfter)void loadNotifications(true);resumeAutoRefresh();}}
+}
+
 async function saveWorldListName(event) {
   if(!event.target.matches('[data-world-list-editor]'))return;
   event.preventDefault();const editor=worldView.editor,store=worldFavorites,view=worldView;
@@ -1147,7 +1110,7 @@ async function saveWorldListName(event) {
   editor.saving=true;editor.error='';state.favoriteMutationPending=true;
   event.target.querySelectorAll('button,input').forEach(control=>{control.disabled=true});
   actionToast.setUndoBusy(true);render({resetScroll:false});
-  showActionToast(t('リスト名を保存しています(少し時間が掛かります)…'),{delay:0});
+  showActionToast(t('リスト名を保存しています…'),{delay:0});
   try {
     await store.rename(editor.key,name,editor.label);
     if(view!==worldView || store!==worldFavorites)return;
@@ -1155,6 +1118,7 @@ async function saveWorldListName(event) {
   }catch(error){
     if(view!==worldView || store!==worldFavorites)return;
     if(error?.status===401){handleSessionExpired();return}
+    diagnosticLog.record('list-rename',error);
     editor.unknown=Boolean(error?.outcomeUnknown);
     editor.error=editor.unknown?'変更結果を確認できませんでした。「更新」で名前を確認してください。':error?.favoriteConflict?'Favoriteが別の画面で変更されたため、操作を中止しました。':'リスト名を変更できませんでした。';
     showActionToast(t(editor.error),{error:true,delay:5600});
@@ -1181,479 +1145,6 @@ function setFriendView({ resetScroll = true } = {}) {
   render({ resetScroll });
 }
 
-function reverseEntryForFriend(friend) {
-  const location = resolveFriendLocation(friend);
-  if (!location || location === 'offline') return null;
-  return state.instances.find((entry) => entry.location === location) || null;
-}
-
-function friendLocationLabel(friend, entry = reverseEntryForFriend(friend)) {
-  const status = onlineStatusInfo(friend);
-  if (!friendIsOnline(friend)) return 'Offline';
-  if (status.className === 'online-website') return 'OtherPlatform';
-  const location = resolveFriendLocation(friend);
-  const permission = entry?.permission || classifyPermission(location);
-  if (permission === PERMISSIONS.PRIVATE || location === 'private') return 'Private';
-  const worldName = entry?.world?.name || entry?.instanceData?.world?.name || '';
-  if (worldName) return worldName;
-  if (entry?.instanceFetchFailed || entry?.worldFetchFailed) return t('情報取得不可');
-  if (entry?.worldId && entry.worldId !== 'offline' && entry.worldId !== 'private') return t('ワールド情報を取得中…');
-  return permissionLabel(permission);
-}
-
-function friendLocationSortKey(friend) {
-  const entry = reverseEntryForFriend(friend);
-  const status = onlineStatusInfo(friend);
-  const location = resolveFriendLocation(friend);
-  const permission = entry?.permission || classifyPermission(location);
-
-  // Instances, Private, OtherPlatform, then Offline.
-  if (!friendIsOnline(friend)) return '3\u0000Offline';
-  if (status.className === 'online-website') {
-    return '2\u0000OtherPlatform';
-  }
-  if (permission === PERMISSIONS.PRIVATE || location === 'private') {
-    return '1\u0000Private';
-  }
-
-  const label = friendLocationLabel(friend, entry);
-  return `0\u0000${label}\u0000${location}`;
-}
-
-function sortReverseFriends(friends) {
-  const rows = [...(friends || [])];
-  if (state.friendViewSort === FRIEND_VIEW_SORTS.LOCATION) {
-    return rows.sort((a, b) => friendLocationSortKey(a).localeCompare(friendLocationSortKey(b), 'ja') || compareOfflineFriends(a, b) || compareFriendNames(a, b));
-  }
-  return rows.sort((a, b) => compareOfflineFriends(a, b) || compareFriendNames(a, b));
-}
-
-function getReverseFriendGroups() {
-  const showOtherPlatform = elements.showOnWebsite?.checked !== false;
-  const onlineFriends = state.friends.filter((friend) => {
-    if (!friendIsOnline(friend) && !elements.showOffline?.checked) return false;
-    if (!showOtherPlatform && onlineStatusInfo(friend).className === 'online-website') return false;
-    return true;
-  });
-  const groupsByName = new Map(state.favoriteGroups.map((group) => [group.name, group]));
-  const ordered = ['group_0', 'group_1', 'group_2'].map((name, index) => {
-    const group = groupsByName.get(name);
-    return {
-      id: name,
-      label: group?.displayName || `Favorite List ${index + 1}`,
-      memberIds: group?.memberIds instanceof Set ? group.memberIds : new Set(),
-      friends: [],
-    };
-  });
-  const ungrouped = { id: 'ungrouped', label: t('その他'), memberIds: new Set(), friends: [] };
-
-  // A friend can theoretically appear in more than one Favorite List. To keep
-  // the reverse view duplicate-free, use the first/highest Favorite List just
-  // like the existing Favorite List sort does.
-  for (const friend of onlineFriends) {
-    const group = ordered.find((candidate) => candidate.memberIds.has(friend.id));
-    (group || ungrouped).friends.push(friend);
-  }
-
-  const sections = [...ordered, ungrouped];
-  sections.forEach((section) => { section.friends = sortReverseFriends(section.friends); });
-  return sections;
-}
-
-function renderFriendLocationPlaceholderIcon({ isPrivate = false, isWebsite = false } = {}) {
-  if (isPrivate) {
-    return `<svg class="friend-location-placeholder-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
-      <path d="M8 10V7.5a4 4 0 0 1 8 0V10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-    </svg>`;
-  }
-  if (isWebsite) {
-    return `<svg class="friend-location-placeholder-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
-      <path d="M3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9S14.5 18.5 12 21M12 3C9.5 5.5 8.2 8.5 8.2 12S9.5 18.5 12 21" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-    </svg>`;
-  }
-  return '<span class="friend-location-placeholder-ellipsis" aria-hidden="true">…</span>';
-}
-
-function renderFriendLocationItem(friend) {
-  if (!friend) return '';
-  const name = friend.displayName || friend.username || friend.id;
-  const status = onlineStatusInfo(friend);
-  const location = resolveFriendLocation(friend);
-  const entry = reverseEntryForFriend(friend);
-  const permission = entry?.permission || classifyPermission(location);
-  const isWebsite = status.className === 'online-website';
-  const isPrivate = permission === PERMISSIONS.PRIVATE || location === 'private';
-  const avatarUrl = friendAvatarUrl(friend);
-  const avatar = avatarUrl
-    ? `<img class="friend-location-avatar" data-image-src="${escapeHtml(avatarUrl)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
-    : '<div class="friend-location-avatar friend-location-avatar-empty"></div>';
-  const profileUrl = CONFIG.DEBUG_MODE ? '' : buildUserProfileUrl(friend.id);
-  const avatarContent = profileUrl
-    ? lt`<a class="friend-location-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(name)} / ${escapeHtml(t('VRChat公式プロフィールを開く'))}">${avatar}</a>`
-    : avatar;
-
-  const worldName = friendLocationLabel(friend, entry);
-  const groupName = entry?.groupName || entry?.instanceData?.group?.name || entry?.instanceData?.groupName || '';
-  const launchUrl = entry && !isPrivate && !isWebsite ? buildInstanceLaunchUrl(entry) : '';
-  const worldUrl = entry && !isPrivate && !isWebsite ? buildWorldUrl(entry) : '';
-  const permissionClass = permissionBadgeClass(permission);
-  const region = entry?.region ? regionLabel(entry.region) : '';
-  const locationTitle = groupName ? `${worldName} / ${groupName}` : worldName;
-
-  let countText = '';
-  if (entry && !isPrivate && !isWebsite) {
-    const userCount = effectiveInstanceUserCount(entry, friendMap());
-    const capacity = entry.world?.capacity ?? entry.capacity ?? entry.world?.hardCapacity;
-    const friendCount = uniqueUsers(entry.friends).length;
-    countText = `${friendCount}/${userCount}/${Number.isFinite(capacity) ? capacity : '-'}`;
-  }
-
-  const thumb = entry && !isPrivate && !isWebsite
-    ? displayImageUrl(entry.world?.thumbnailImageUrl || entry.instanceData?.world?.thumbnailImageUrl || entry.instanceData?.world?.imageUrl || '', 'world')
-    : '';
-  const thumbContent = thumb
-    ? `<img class="friend-location-thumb" data-image-src="${escapeHtml(thumb)}" loading="lazy" decoding="async" alt="">`
-    : `<div class="friend-location-thumb friend-location-thumb-placeholder">${renderFriendLocationPlaceholderIcon({ isPrivate, isWebsite })}</div>`;
-  const simpleStatusText = isWebsite
-    ? 'OtherPlatform'
-    : isPrivate
-      ? 'Private'
-      : permissionLabel(permission);
-  const simpleCountText = !isWebsite && !isPrivate && countText ? countText : '';
-  const thumbOverlay = `
-    <div class="friend-location-thumb-simple-meta">
-      <span class="friend-state friend-location-thumb-simple-status ${permissionClass}">${escapeHtml(simpleStatusText)}</span>
-      ${simpleCountText ? lt`<span class="friend-location-thumb-simple-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(simpleCountText)}</span>` : ''}
-    </div>
-    <div class="friend-location-thumb-simple-title" title="${escapeHtml(locationTitle)}">${escapeHtml(locationTitle)}</div>`;
-  const thumbWrapped = worldUrl
-    ? lt`<a class="friend-location-thumb-link" href="${escapeHtml(worldUrl)}" target="_blank" rel="noopener noreferrer" title="ワールドページを開く">${thumbContent}${thumbOverlay}</a>`
-    : `<div class="friend-location-thumb-link">${thumbContent}${thumbOverlay}</div>`;
-
-  const locationMeta = isWebsite
-    ? `<span class="friend-state friend-location-permission ${permissionClass}">OtherPlatform</span>`
-    : isPrivate
-      ? `<span class="friend-state friend-location-permission ${permissionClass}">Private</span>`
-      : `<span class="friend-state friend-location-permission ${permissionClass}">${escapeHtml(permissionLabel(permission))}</span>${region ? `<span class="friend-location-region">${escapeHtml(region)}</span>` : ''}${countText ? lt`<span class="friend-location-count" title="フレンド数 / 参加人数 / 最大人数">${escapeHtml(countText)}</span>` : ''}`;
-
-  const lastActivityText = !friendIsOnline(friend) ? formatActivityDateTime(friend.last_activity) : '';
-  const lastActivity = lastActivityText
-    ? `<time class="friend-location-last-activity" datetime="${escapeHtml(friend.last_activity)}" title="${escapeHtml(uiText('lastActivity'))}">${escapeHtml(lastActivityText)}</time>`
-    : '';
-
-  const locationName = launchUrl
-    ? lt`<a class="friend-location-world-link" href="${escapeHtml(launchUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式Launchページを開く">${escapeHtml(locationTitle)}</a>`
-    : `<span class="friend-location-world-name" title="${escapeHtml(locationTitle)}">${escapeHtml(locationTitle)}</span>`;
-
-  const nameContent = profileUrl
-    ? `<a class="friend-location-name" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(name)}">${escapeHtml(name)}</a>`
-    : `<span class="friend-location-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
-  const statusDot = `<span class="online-dot ${status.className}" title="${escapeHtml(status.label)}" aria-label="${escapeHtml(status.label)}">●</span>`;
-  const locationData = entry?.location && !isPrivate ? ` data-location="${escapeHtml(entry.location)}"` : '';
-  const previewDisabledClass = !friendIsOnline(friend) || isPrivate || isWebsite ? ' friend-location-no-preview' : '';
-  const markup = `
-    <article class="friend-location-item${!friendIsOnline(friend) ? ' friend-offline' : ''}${entry && needsHydration(entry) ? ' friend-location-loading' : ''}${previewDisabledClass}" data-friend-id="${escapeHtml(friend.id)}"${locationData}>
-      <div class="friend-location-avatar-wrap">
-        ${avatarContent}
-        <span class="friend-location-online-dot">${statusDot}</span>
-        <div class="friend-location-avatar-name"><span class="friend-location-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span></div>
-        ${renderFavoriteActionButton(friend.id, 'friend-location-favorite')}
-      </div>
-      <div class="friend-location-copy">
-        <div class="friend-location-name-line">
-          ${statusDot}${nameContent}
-        </div>
-        <div class="friend-location-world-line">${locationName}${lastActivity}</div>
-        <div class="friend-location-meta">${locationMeta}</div>
-      </div>
-      ${thumbWrapped}
-    </article>`;
-  // Keep the original labels for restoring Normal tips without rebuilding cards.
-  // Favorite controls retain their native tooltip in either display format.
-  return markup.replace(/<[^>]+>/g, tag => {
-    if (tag.includes('data-favorite-user-id=')) return tag;
-    return tag.replace(/ title="([^"]*)"/g, (_, label) =>
-      ` data-friend-tip="${label}"${state.instanceDisplay === 'normal' ? ` title="${label}"` : ''}`);
-  });
-}
-
-function renderFavoriteGroupEditor(group) {
-  const editor = state.favoriteGroupEditor;
-  if (editor?.groupName !== group.id) return '';
-  const disabled = editor.saving ? ' disabled' : '';
-  return lt`<form class="favorite-group-editor" data-group-editor="${escapeHtml(group.id)}">
-    <label class="favorite-group-editor-label">グループ名
-      <input class="favorite-group-name-input" name="displayName" type="text" autocomplete="off"
-        aria-label="Favoriteグループ名" maxlength="${CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH}" aria-describedby="favorite-group-name-help" value="${escapeHtml(editor.draft)}" required${disabled}>
-    </label>
-    <div class="favorite-group-editor-actions">
-      <span class="favorite-group-name-count">${editor.draft.length} / ${CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH}</span>
-      <button class="favorite-group-save" type="submit"${editor.saving || editor.outcomeUnknown ? ' disabled' : ''}>保存</button>
-      <button class="favorite-group-cancel" type="button" data-group-edit-cancel${disabled}>キャンセル</button>
-    </div>
-    <p class="favorite-group-save-status" role="status"${editor.saving ? '' : ' hidden'}>${editor.saving ? escapeHtml(t('リスト名を保存しています(少し時間が掛かります)…')) : ''}</p>
-    <p class="favorite-group-editor-help" id="favorite-group-name-help">最大20文字。一部の絵文字は2文字分として数えます。</p>
-    <p class="favorite-group-editor-error" role="alert"${editor.error ? '' : ' hidden'}>${escapeHtml(editor.error || '')}</p>
-  </form>`;
-}
-
-function renderFriendLocationView() {
-  const groups = getReverseFriendGroups();
-  const sections = groups.map((group, index) => {
-    const isFavoriteGroup = index < 3;
-    const collapsed = state.collapsedFriendGroups.has(group.id);
-    const icon = isFavoriteGroup ? '★' : '●';
-    const regularFriends = group.id === 'ungrouped' ? group.friends.filter(friendIsOnline) : group.friends;
-    const offlineFriends = group.id === 'ungrouped' ? group.friends.filter(friend => !friendIsOnline(friend)) : [];
-    const rows = collapsed
-      ? ''
-      : regularFriends.length
-        ? limitedMarkup(regularFriends, group.id, renderFriendLocationItem)
-        : group.id === 'ungrouped' && offlineFriends.length ? '' : t('<div class="friend-location-section-empty">該当するフレンドはいません</div>');
-    return lt`
-      <section class="friend-location-section${collapsed ? ' is-collapsed' : ''}" data-favorite-group="${escapeHtml(group.id)}">
-        <div class="friend-location-section-heading">
-        <button class="friend-location-section-header" type="button"
-                data-friend-group-toggle="${escapeHtml(group.id)}"
-                aria-expanded="${String(!collapsed)}"
-                title="${collapsed ? t('展開') : t('折り畳む')}">
-          <span class="friend-location-section-title">
-            <span class="friend-location-section-chevron" aria-hidden="true">${collapsed ? '▶' : '▼'}</span>
-            <span class="friend-location-section-icon${isFavoriteGroup ? ' is-favorite' : ''}" aria-hidden="true">${icon}</span>
-            <span class="friend-location-section-label" title="${escapeHtml(group.label)}">${escapeHtml(group.label)}</span>
-          </span>
-          <span class="friend-location-section-count">${group.friends.length}人</span>
-        </button>
-        ${isFavoriteGroup ? lt`<button class="favorite-group-edit-button" type="button" data-group-edit="${escapeHtml(group.id)}" aria-label="${escapeHtml(group.label)}の名前を編集" title="名前を編集"${state.favoriteGroupEditor?.saving ? ' disabled' : ''}>
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1 12-12a2.8 2.8 0 0 0-4-4L4 15z"/></svg>
-        </button>` : ''}
-        </div>
-        ${renderFavoriteGroupEditor(group)}
-        ${collapsed ? '' : `${rows ? `<div class="friend-location-grid">${rows}</div>` : ''}${group.id === 'ungrouped' && elements.showOffline?.checked ? renderUngroupedOfflineSection(offlineFriends) : ''}`}
-      </section>`;
-  }).join('');
-
-  return `<div class="friend-location-view">${sections}</div>`;
-}
-
-function renderUngroupedOfflineSection(friends) {
-  const collapsed = state.collapsedFriendGroups.has('ungrouped-offline');
-  return lt`<section class="friend-location-offline-section${collapsed ? ' is-collapsed' : ''}" data-offline-section>
-    <button class="friend-location-section-header" type="button" data-friend-group-toggle="ungrouped-offline" aria-expanded="${String(!collapsed)}" aria-controls="ungroupedOfflineFriends" title="${collapsed ? t('展開') : t('折り畳む')}">
-      <span class="friend-location-section-title"><span class="friend-location-section-chevron" aria-hidden="true">${collapsed ? '▶' : '▼'}</span><span class="friend-location-section-icon" aria-hidden="true">○</span>Offline</span>
-      <span class="friend-location-section-count">${friends.length}人</span>
-    </button>
-    ${collapsed ? '' : `<div id="ungroupedOfflineFriends" class="friend-location-grid">${friends.length ? limitedMarkup(friends, 'ungrouped-offline', renderFriendLocationItem) : t('<div class="friend-location-section-empty">Offlineのフレンドはいません</div>')}</div>`}
-  </section>`;
-}
-
-function buildInstanceLaunchUrl(entry) {
-  const worldId = entry?.worldId;
-  const instanceId = entry?.instanceId;
-  if (!worldId || !instanceId || worldId === 'offline' || worldId === 'private') return '';
-  return `${CONFIG.LAUNCH_PAGE}?worldId=${encodeURIComponent(worldId)}&instanceId=${encodeURIComponent(instanceId)}`;
-}
-
-function buildWorldUrl(entry) {
-  if (!entry?.worldId?.startsWith('wrld_')) return '';
-  return `${CONFIG.WORLD_PAGE_BASE}/${encodeURIComponent(entry.worldId)}/info`;
-}
-
-function buildUserProfileUrl(userId) {
-  if (typeof userId !== 'string' || !/^usr_[0-9a-f-]+$/i.test(userId)) return '';
-  return `https://vrchat.com/home/user/${encodeURIComponent(userId)}`;
-}
-
-function renderSummaryPeopleIcon(kind) {
-  if (kind === 'world') {
-    return `<svg class="summary-people-icon summary-people-icon-world" viewBox="0 0 24 18" aria-hidden="true" focusable="false">
-      <circle cx="12" cy="5" r="3" fill="currentColor"/>
-      <circle cx="5" cy="7" r="2.5" fill="currentColor"/>
-      <circle cx="19" cy="7" r="2.5" fill="currentColor"/>
-      <path d="M7.2 16c.3-4 2-6.1 4.8-6.1s4.5 2.1 4.8 6.1H7.2Z" fill="currentColor"/>
-      <path d="M.8 16c.2-3.3 1.6-5 4.2-5 1.2 0 2.2.4 3 1.2-.8 1-1.3 2.3-1.5 3.8H.8Z" fill="currentColor"/>
-      <path d="M17.5 16c-.2-1.5-.7-2.8-1.5-3.8.8-.8 1.8-1.2 3-1.2 2.6 0 4 1.7 4.2 5h-5.7Z" fill="currentColor"/>
-    </svg>`;
-  }
-  return `<svg class="summary-people-icon summary-people-icon-friends" viewBox="0 0 22 18" aria-hidden="true" focusable="false">
-    <circle cx="7" cy="6" r="3" fill="currentColor"/>
-    <circle cx="15" cy="6" r="3" fill="currentColor"/>
-    <path d="M1 17c.2-4.3 2.2-6.5 6-6.5 1.7 0 3 .5 4 1.5-1.2 1.2-1.8 2.9-2 5H1Z" fill="currentColor"/>
-    <path d="M13 17c-.2-2.1-.8-3.8-2-5 1-1 2.3-1.5 4-1.5 3.8 0 5.8 2.2 6 6.5h-8Z" fill="currentColor"/>
-  </svg>`;
-}
-
-function ownerDisplayState() {
-  return state.viewMode === VIEW_MODES.INSTANCES ? state : {...state, tab:TABS.ALL};
-}
-
-function renderParticipantList(entry, { showAll = false } = {}) {
-  const participantState = showAll ? { ...state, tab: TABS.ALL } : state;
-  const participants = sortParticipants(
-    entry,
-    participantsForEntry(entry, participantState, friendMap()),
-    state,
-  );
-  const extraOwner = nonFriendOwnerForEntry(entry, ownerDisplayState(), friendMap());
-  const renderUser = (user, ownerInfo=false) => {
-    const name = user.displayName || user.username || user.id;
-    const src = displayImageUrl(
-      user.profilePicOverride
-        || user.currentAvatarThumbnailImageUrl
-        || user.userIcon
-        || user.iconUrl
-        || user.imageUrl
-        || '',
-    );
-    const profileUrl = buildUserProfileUrl(user.id);
-    const avatar = src
-      ? `<img class="participant-avatar" data-image-src="${escapeHtml(src)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
-      : '<div class="participant-avatar participant-avatar-empty"></div>';
-    const avatarLink = profileUrl
-      ? lt`<a class="participant-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${avatar}</a>`
-      : avatar;
-    const isOwner = Boolean(instanceOwnerId(entry) === user.id);
-    const isFriend = friendMap().has(user.id);
-    const ownerBadge = isOwner
-      ? `<span class="owner-badge${ownerInfo?' owner-badge-reference':''}" title="${escapeHtml(ownerInfo?t('現在の参加者とは限りません。インスタンスオーナーとして表示しています。'):'Instance Owner')}">Owner</span>`
-      : '';
-    const favoriteBadge = isFriend
-      ? renderFavoriteActionButton(user.id, 'favorite-badge-participant')
-      : '';
-
-    return `
-      <div class="participant" title="${escapeHtml(name)}">
-        <div class="participant-avatar-wrap">
-          ${avatarLink}${ownerBadge}${favoriteBadge}
-        </div>
-        <div class="participant-name">${escapeHtml(name)}</div>
-      </div>`;
-  };
-  const empty = !showAll && state.tab === TABS.FAVORITE_ONLY
-    ? t('表示対象のFavoriteフレンドはいません') : t('表示対象のユーザーはいません');
-  const people = participants.length ? `<div class="participant-list">${participants.map(user=>renderUser(user)).join('')}</div>`
-    : `<div class="participant-empty">${escapeHtml(empty)}</div>`;
-  const ownerFrame = extraOwner ? `<section class="non-friend-owner-info" aria-label="${escapeHtml(t('インスタンスオーナー'))}">${renderUser(extraOwner,true)}</section>` : '';
-  return ownerFrame ? `<div class="participant-list has-owner">${ownerFrame}${participants.map(user=>renderUser(user)).join('') || `<div class="participant-empty">${escapeHtml(empty)}</div>`}</div>` : people;
-}
-
-function renderPrivateInstance(entry, { showAll = false } = {}) {
-  const favoriteMode = !showAll && (state.tab === TABS.FAVORITE_PLUS || state.tab === TABS.FAVORITE_ONLY);
-  const visibleFriends = showAll
-    ? entry.friends
-    : favoriteMode
-      ? entry.friends.filter((friend) => state.favorites.has(friend.id))
-      : entry.friends;
-
-  const collapsible = !showAll && state.viewMode !== VIEW_MODES.FRIENDS && state.tab === TABS.ALL;
-  const header = collapsible ? lt`<button type="button" class="friend-location-section-header" data-private-toggle="true" aria-expanded="${!state.privateCollapsed}" aria-controls="privateInstanceUsers"><span class="friend-location-section-chevron" aria-hidden="true">${state.privateCollapsed ? '▶' : '▼'}</span><span class="friend-location-section-title">Private</span><span class="friend-location-section-count">${visibleFriends.length}人</span></button>` : '';
-  if (collapsible && state.privateCollapsed) return `<section class="friend-location-section private-instance-section is-collapsed" data-location="${escapeHtml(entry.location)}">${header}</section>`;
-  const body = `
-    <article class="private-card${instanceIsHighlighted(entry) ? ' instance-highlight' : ''}" data-location="${escapeHtml(entry.location)}" aria-label="Private">
-      <div class="private-label">Private</div>
-      <div class="private-users">
-        ${visibleFriends.map((friend) => {
-          const name = friend.displayName || friend.username || friend.id;
-          const src = friendAvatarUrl(friend);
-          const profileUrl = CONFIG.DEBUG_MODE ? '' : buildUserProfileUrl(friend.id);
-          const privateAvatar = src
-            ? `<img class="private-avatar" data-image-src="${escapeHtml(src)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
-            : `<div class="private-avatar private-avatar-empty" aria-label="${escapeHtml(name)}"></div>`;
-          const privateAvatarLink = profileUrl
-            ? lt`<a class="private-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式プロフィールを開く">${privateAvatar}</a>`
-            : privateAvatar;
-          return `
-            <div class="private-user" title="${escapeHtml(name)}">
-              <div class="private-avatar-wrap">
-                ${privateAvatarLink}
-                ${renderFavoriteActionButton(friend.id, 'private-favorite-badge')}
-              </div>
-              <div class="private-user-name">${escapeHtml(name)}</div>
-            </div>`;
-        }).join('')}
-        ${visibleFriends.length === 0 ? `<div class="private-empty">${favoriteMode ? t('Favoriteフレンドはいません') : t('表示対象のユーザーはいません')}</div>` : ''}
-      </div>
-    </article>`;
-  return collapsible ? `<section class="friend-location-section private-instance-section" data-location="${escapeHtml(entry.location)}">${header}<div id="privateInstanceUsers">${body}</div></section>` : body;
-}
-
-function renderInstanceCard(entry, { preview = false } = {}) {
-  if (entry.permission === PERMISSIONS.PRIVATE) return renderPrivateInstance(entry, { showAll: preview });
-
-  const worldName = entry.world?.name
-    || entry.instanceData?.world?.name
-    || entry.worldId
-    || 'World information unavailable';
-  const thumb = displayImageUrl(
-    entry.world?.thumbnailImageUrl
-      || entry.instanceData?.world?.thumbnailImageUrl
-      || '',
-    'world',
-  );
-  const worldUrl = entry.debug ? '' : buildWorldUrl(entry);
-  const launchUrl = entry.debug ? '' : buildInstanceLaunchUrl(entry);
-  const groupName = entry.groupName
-    || entry.instanceData?.group?.name
-    || entry.instanceData?.groupName
-    || (entry.groupId ? t('グループ名取得中…') : '');
-  const userCount = effectiveInstanceUserCount(entry, friendMap());
-  const capacity = entry.world?.capacity ?? entry.capacity ?? entry.world?.hardCapacity;
-  const allFriends = uniqueUsers(entry.friends);
-  const allFriendCount = allFriends.length;
-  const favoriteFriendCount = allFriends.filter((friend) => state.favorites.has(friend.id)).length;
-  const friendCount = preview
-    ? allFriendCount
-    : state.tab === TABS.FAVORITE_ONLY
-      ? favoriteFriendCount
-      : allFriendCount;
-  const userCountText = Number.isFinite(capacity) ? `${userCount} / ${capacity}` : `${userCount}`;
-  const thumbnailCountText = `${allFriendCount}/${userCount}/${Number.isFinite(capacity) ? capacity : '-'}`;
-  const permissionClass = permissionBadgeClass(entry.permission);
-  const regionBadge = ''; 
-  const hydrated = Boolean(entry.instanceData || entry.world);
-
-  return lt`
-    <article class="card${hydrated ? '' : ' card-loading'}${instanceIsHighlighted(entry) ? ' instance-highlight' : ''}" data-location="${escapeHtml(entry.location)}">
-      <div class="thumb-wrap${worldUrl ? ' thumb-clickable' : ''}">
-      ${worldUrl ? lt`<a class="world-page-link" href="${escapeHtml(worldUrl)}" target="_blank" rel="noopener noreferrer" title="ワールドページを開く">` : '<div class="world-page-link">'}
-        ${thumb
-          ? `<img class="thumb" data-image-src="${escapeHtml(thumb)}" loading="eager" decoding="async" alt="">`
-          : '<div class="thumb thumb-placeholder"></div>'}
-        <div class="badges">
-          <span class="badge ${permissionClass}">${escapeHtml(permissionLabel(entry.permission))}</span>${regionBadge}
-        </div>
-        <div class="people-count" title="フレンド数 / 参加人数 / 最大人数">
-          <span class="people-count-normal">${escapeHtml(thumbnailCountText)}</span>
-          <span class="people-count-simple">${escapeHtml(thumbnailCountText)}</span>
-        </div>
-        <div class="overlay-title" title="${escapeHtml(worldName)}">${escapeHtml(worldName)}</div>
-      ${worldUrl ? '</a>' : '</div>'}
-      </div>
-      <button class="invite-me-button invite-me-button-simple" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInviteMeを送信" ${entry.debug || state.pendingInvites.has(entry.location) || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>InviteMe</button>
-
-      <div class="info-panel">
-        <div class="instance-title-line">
-          ${launchUrl
-            ? lt`<a class="instance-title-name instance-title-name-link" href="${escapeHtml(launchUrl)}" target="_blank" rel="noopener noreferrer" title="VRChat公式Launchページを開く">${escapeHtml(worldName)}</a>`
-            : `<span class="instance-title-name" title="${escapeHtml(worldName)}">${escapeHtml(worldName)}</span>`}
-          ${entry.groupId ? `<span class="instance-title-separator">/</span><span class="instance-title-group" title="${escapeHtml(groupName)}">${escapeHtml(groupName)}</span>` : ''}
-        </div>
-
-        <div class="summary-row">
-          <div class="summary-item permission-summary"><svg class="summary-globe" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
-            <circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
-            <path d="M2.8 10h14.4M10 2.5c2.1 2 3.2 4.5 3.2 7.5S12.1 15.5 10 17.5M10 2.5C7.9 4.5 6.8 7 6.8 10s1.1 5.5 3.2 7.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg><span class="summary-value">${escapeHtml(permissionLabel(entry.permission))}${entry.region ? ` / ${escapeHtml(regionLabel(entry.region))}` : ''}</span></div>
-          <div class="summary-item">${renderSummaryPeopleIcon('world')}<span class="summary-value">${escapeHtml(userCountText)}</span></div>
-          <div class="summary-item friend-count-summary">${renderSummaryPeopleIcon('friends')}<span class="summary-value">${escapeHtml(String(friendCount))}</span><button class="invite-me-button invite-me-button-normal" type="button" data-location="${escapeHtml(entry.location)}" title="このインスタンスへ自分宛てのInviteMeを送信" ${entry.debug || state.pendingInvites.has(entry.location) || !entry.worldId || !entry.instanceId ? 'disabled' : ''}>InviteMe</button></div>
-        </div>
-
-        ${renderParticipantList(entry, { showAll: preview })}
-      </div>
-    </article>`;
-}
 
 async function onInviteMeClick(event) {
   const button = event.target.closest('.invite-me-button');
@@ -1702,6 +1193,7 @@ async function onInviteMeClick(event) {
         ? t('このインスタンスは存在しないか、InviteMeを送信できません。')
         : error?.outcomeUnknown ? t('送信結果を確認できませんでした。VRChat側の通知を確認してください。')
       : lt`InviteMeの送信に失敗しました${error?.status ? ` (${error.status})` : ''}`;
+    diagnosticLog.record('invite-me',error);
     showActionToast(message, { error: true, delay: 5600 });
   } finally {
     state.pendingInvites.delete(location);
@@ -1784,6 +1276,7 @@ function replaceCardInDom(entry) {
   if (!replacement) return;
   const scrollTop = elements.list.scrollTop;
   patchElement(node, replacement);
+  syncFavoriteMenuHighlight();
   elements.list.scrollTop = scrollTop;
   if (needsHydration(currentEntry)) hydrationController.observeNode(node);
 
@@ -1895,7 +1388,6 @@ async function hydrateInstance(location, fallbackEntry) {
   }
 }
 
-
 const FRIEND_PREVIEW_OPEN_DELAY_MS = 550;
 const FRIEND_PREVIEW_CLOSE_DELAY_MS = 180;
 
@@ -1980,6 +1472,7 @@ function renderFriendInstancePreview(entry) {
   preview.style.setProperty('--friend-preview-columns', String(columns));
   preview.style.setProperty('--friend-preview-grid-width', `${gridWidth}px`);
   patchMarkup(preview, renderInstanceCard(entry, { preview: true }));
+  syncFavoriteMenuHighlight();
   preview.classList.remove('hidden');
   requestAnimationFrame(positionFriendInstancePreview);
 }
@@ -2156,7 +1649,7 @@ function onFriendViewControlClick(event) {
   const editButton = event.target.closest('[data-group-edit]');
   if (editButton && elements.list?.contains(editButton)) {
     event.preventDefault();
-    if (state.loading || state.favoriteMutationPending || state.pendingInvites.size) return;
+    if (state.loading || state.favoriteMutationPending || state.pendingInvites.size || notificationBusy) return;
     const groupName = editButton.dataset.groupEdit;
     const group = state.favoriteGroups.find(group => group.name === groupName);
     if (!FAVORITE_GROUP_NAMES.includes(groupName)) return;
@@ -2214,7 +1707,7 @@ async function saveFavoriteGroupName(event) {
   state.favoriteMutationPending = true;
   actionToast.setUndoBusy(true);
   render({ resetScroll: false });
-  showActionToast(t('リスト名を保存しています(少し時間が掛かります)…'), { delay: 0 });
+  showActionToast(t('リスト名を保存しています…'), { delay: 0 });
   try {
     const result = await dataRepository.renameFriendFavoriteGroup(editor.groupName, name);
     if (generation !== state.loadGeneration || dataRepository.disposed) return;
@@ -2228,6 +1721,7 @@ async function saveFavoriteGroupName(event) {
     if (generation !== state.loadGeneration || error?.name === 'AbortError') return;
     if (error?.status === 401) { handleSessionExpired(); return; }
     editor.saving = false;
+    diagnosticLog.record('list-rename',error);
     editor.outcomeUnknown = Boolean(error?.outcomeUnknown);
     editor.error = editor.outcomeUnknown
       ? t('変更結果を確認できませんでした。「更新」で名前を確認してください。')
@@ -2245,8 +1739,34 @@ async function saveFavoriteGroupName(event) {
 
 const FAVORITE_GROUP_NAMES = Object.freeze(['group_0', 'group_1', 'group_2']);
 
+// Highlight only the invoking control, even if the same user/world appears elsewhere.
+const FAVORITE_TARGET_SELECTOR='.friend-location-item,.friend-item,.participant,.private-user,.recent-world-card';
+function setFavoriteMenuAnchor(anchor) {
+  const previous=state.favoriteMenu.anchor;
+  state.favoriteMenu.targetCard?.classList.remove('is-favorite-target');
+  if(previous && previous!==anchor){
+    previous.classList.remove('is-favorite-menu-open');
+    previous.setAttribute('aria-expanded','false');
+  }
+  state.favoriteMenu.anchor=anchor;
+  state.favoriteMenu.targetCard=anchor?.closest(FAVORITE_TARGET_SELECTOR)||null;
+  if(anchor){
+    anchor.classList.add('is-favorite-menu-open');
+    anchor.setAttribute('aria-expanded','true');
+    state.favoriteMenu.targetCard?.classList.add('is-favorite-target');
+  }
+}
+function syncFavoriteMenuHighlight() {
+  const anchor=state.favoriteMenu.anchor;
+  if(!anchor)return;
+  const matches=state.favoriteMenu.worldId?anchor.dataset.worldFavoriteId===state.favoriteMenu.worldId:anchor.dataset.favoriteUserId===state.favoriteMenu.userId;
+  if(!anchor.isConnected || !matches){closeFavoriteMenu();return;}
+  setFavoriteMenuAnchor(anchor);
+}
+
 function closeFavoriteMenu({ restoreFocus = false } = {}) {
   const anchor = state.favoriteMenu.anchor;
+  setFavoriteMenuAnchor(null);
   if (elements.favoriteMenu) {
     elements.favoriteMenu.classList.add('hidden');
     elements.favoriteMenu.innerHTML = '';
@@ -2294,7 +1814,8 @@ function renderFavoriteMenu(userId, anchor) {
   menu.innerHTML = `${groupRows}${removeRow}`;
   menu.classList.remove('hidden');
   state.favoriteMenu.userId = userId;
-  state.favoriteMenu.anchor = anchor;
+  state.favoriteMenu.worldId = '';
+  setFavoriteMenuAnchor(anchor);
   state.favoriteMenu.fromFriendPreview = Boolean(elements.friendInstancePreview?.contains(anchor));
   if (state.favoriteMenu.fromFriendPreview) clearFriendPreviewTimer('close');
   requestAnimationFrame(() => positionFavoriteMenu(anchor));
@@ -2419,7 +1940,6 @@ async function undoFavorite(ticket) {
   }
 }
 
-
 function initializeDemoWorldFavorites(instances) {
   worldFavorites = new WorldFavorites(repository.api);
   worldFavorites.ready = true; worldFavorites.updatedAt = Date.now();
@@ -2435,7 +1955,7 @@ function renderWorldFavoriteButton(worldId) {
   const label = worldFavorites?.ready
     ? t(active ? 'ワールドFavoriteを変更' : 'ワールドをFavoriteに登録')
     : t('ワールドFavoriteを確認中…');
-  return `<button type="button" class="world-favorite-button favorite-badge${pending ? ' is-pending' : ''}${active ? ' is-favorite' : ''}" data-world-favorite-id="${escapeHtml(worldId)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${pending ? ' aria-busy="true"' : ''}${pending || state.favoriteMutationPending || state.loading ? ' disabled' : ''}><span aria-hidden="true">${active ? `★${number}` : pending ? '…' : ''}</span></button>`;
+  return `<button type="button" class="world-favorite-button favorite-badge${pending ? ' is-pending' : ''}${active ? ' is-favorite' : ''}" data-world-favorite-id="${escapeHtml(worldId)}" aria-haspopup="menu" aria-expanded="false" aria-controls="favoriteMenu" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${pending ? ' aria-busy="true"' : ''}${pending || state.favoriteMutationPending || state.loading ? ' disabled' : ''}><span aria-hidden="true">${active ? `★${number}` : pending ? '…' : ''}</span></button>`;
 }
 function unavailableFavoriteWorld(worldId) {
   const world=worldCatalog.worlds.get(worldId) || state.recent.rows.find(w=>w.id===worldId);
@@ -2454,7 +1974,7 @@ function renderWorldFavoriteMenu(worldId, anchor) {
       return `<button type="button" class="favorite-menu-item${active?' is-current':''}" role="menuitemradio" aria-checked="${active}" data-world-favorite-id="${escapeHtml(worldId)}" data-world-favorite-group="${escapeHtml(g.key)}"><span class="favorite-menu-check" aria-hidden="true">${active?'✓':''}</span><span class="favorite-menu-label">${escapeHtml(label)}</span></button>`;
     }).join('')) + (current.length ? `<div class="favorite-menu-separator" role="separator"></div><button type="button" class="favorite-menu-item favorite-menu-remove" data-world-favorite-id="${escapeHtml(worldId)}" data-world-favorite-remove role="menuitem"><span class="favorite-menu-check" aria-hidden="true"></span><span class="favorite-menu-label">${escapeHtml(t('Favoriteを外す'))}</span></button>`:'')
     : `<button type="button" class="favorite-menu-item" data-world-favorite-retry="${escapeHtml(worldId)}">${escapeHtml(t('ワールドFavoriteを再取得'))}</button>`);
-  state.favoriteMenu.worldId=worldId;state.favoriteMenu.anchor=anchor;
+  state.favoriteMenu.worldId=worldId;state.favoriteMenu.userId='';setFavoriteMenuAnchor(anchor);
   state.favoriteMenu.fromFriendPreview=Boolean(elements.friendInstancePreview?.contains(anchor));
   if(state.favoriteMenu.fromFriendPreview)clearFriendPreviewTimer('close');
   menu.classList.remove('hidden');requestAnimationFrame(()=>positionFavoriteMenu(anchor));
@@ -2635,7 +2155,10 @@ const hydrationController = new InstanceHydrationController({
 });
 
 function render({ resetScroll = false, hydrationMode = 'normal', priorityLocation = '' } = {}) {
+  void ensureIconFrames();
   updateReloadButton();
+  resumeAutoRefresh();
+  renderNotificationPanel();
   hideFriendInstancePreview({ immediate: true });
   closeFavoriteMenu();
   const friendScroll = elements.friendList?.scrollTop || 0;
@@ -2647,7 +2170,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   renderFriendSidebar();
 
   const manifest = globalThis.chrome?.runtime?.getManifest?.();
-  const appVersion = manifest?.version_name || manifest?.version || '1.6.5';
+  const appVersion = manifest?.version_name || manifest?.version || '1.6.6.3';
   const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
   if (state.viewMode === VIEW_MODES.RECENT) {
     patchMarkup(elements.list, `${renderRecentWorlds()}${credit}`);
@@ -2664,6 +2187,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
 
   elements.friendList.scrollTop = friendScroll;
   elements.list.scrollTop = rightScroll;
+  updateBackToTop();
   startPendingGroupRefresh();
   if (state.viewMode === VIEW_MODES.RECENT) {
     // Stop unstarted instance work from the previous view. The visible left
@@ -2735,22 +2259,37 @@ function focusFriendInstance(friend) {
   }, CONFIG.FOCUS_HYDRATION_DELAY_MS);
 }
 
+let updatedAtClock=null;
+function stopUpdatedAtClock(){clearInterval(updatedAtClock);updatedAtClock=null;}
+function startUpdatedAtClock(){
+  stopUpdatedAtClock();updateLoadedAtLabel();
+  if(!document.hidden)updatedAtClock=setInterval(updateLoadedAtLabel,15000);
+}
 function updateLoadedAtLabel() {
-  if (!elements.updatedAt) return;
-  if (!state.lastLoadedAt) {
-    elements.updatedAt.textContent = t('更新: --:--:--');
-    elements.updatedAt.title = t('最終更新');
-    return;
+  const control=elements.updatedAt;if(!control)return;
+  control.disabled=!state.lastLoadedAt;
+  control.setAttribute('aria-pressed',String(state.updatedTimeMode==='exact'));
+  if(!state.lastLoadedAt){
+    const text=t('更新: --:--:--');if(control.textContent!==text)control.textContent=text;
+    control.title=t('最終更新');control.setAttribute('aria-label',text);delete control.dataset.dataState;return;
   }
-
-  const date = new Date(state.lastLoadedAt);
-  const time = [date.getHours(), date.getMinutes(), date.getSeconds()]
-    .map((value) => String(value).padStart(2, '0'))
-    .join(':');
-  const label = lt`更新: ${time}`;
-  elements.updatedAt.textContent = label;
-  elements.reloadButton.title = `${t('最新情報を取得')} / ${label}`;
-  elements.updatedAt.title = state.dataFromCache ? lt`${label}（一部キャッシュ）` : label;
+  const date=new Date(state.lastLoadedAt);
+  const time=[date.getHours(),date.getMinutes(),date.getSeconds()].map(v=>String(v).padStart(2,'0')).join(':');
+  const full=formatActivityDateTime(date.toISOString());
+  const value=state.updatedTimeMode==='exact'?time:elapsedUpdateLabel(state.lastLoadedAt,Date.now(),getLocale());
+  const label=t('更新: ')+value;
+  const stale=state.loadFailed||state.dataFromCache;
+  const text=label+(stale?' / '+t('前回の情報'):'');
+  if(control.textContent!==text)control.textContent=text;
+  control.dataset.dataState=stale?'previous':'current';
+  const hint=t(state.updatedTimeMode==='exact'?'クリックで経過時間を表示':'クリックで更新時刻を表示');
+  control.title=t('最終更新')+': '+full+' / '+hint+(stale?' / '+t('前回取得した情報を表示しています。'):'');
+  control.setAttribute('aria-label',text+' / '+hint);
+  elements.reloadButton.title=t('最新情報に更新')+' / '+full;
+}
+function updateBackToTop(){
+  const button=elements.backToTop;if(!button)return;
+  button.hidden=elements.list.scrollTop<Math.max(200,elements.list.clientHeight/2);
 }
 
 async function refreshGroupDataInBackground(userId, dataRepository, generation) {
@@ -2929,6 +2468,10 @@ function loadDebugData() {
 }
 
 function clearDisplayedData() {
+  diagnosticLog.clear();
+  notificationProfileReads.clear();notificationProfileFailures.clear();
+  if(notificationBulk)notificationBulk.stop=true;notificationBulk=null;
+  notifications?.dispose();notifications=null;notificationReply=null;notificationMemoComposing=false;iconFrames.reset();notificationLocal.select('');notificationImageSaves.clear();setNotificationPanelOpen(false);updateNotificationBadge();
   state.recent = { account: '', rows: [], ready: false, loading: false, error: false, token: state.recent.token + 1 };
   worldFavorites = null;
   worldCatalog=new WorldCatalog(); worldView={selected:'recent',loading:false,error:false,token:worldView.token+1,editor:null};
@@ -2961,16 +2504,25 @@ function clearDisplayedData() {
   elements.friendCount.title = t('表示中 / 表示対象総数');
   elements.friendCount.setAttribute('aria-label', t('表示中 0人 / 表示対象総数 0人'));
   updateLoadedAtLabel();
+  updateBackToTop();
+}
+
+function handleAccountChanged() {
+  state.loadGeneration++; repository.dispose(); state.loading=false;
+  clearDisplayedData(); updateReloadButton();
+  setStatus(t('アカウントが変わりました。更新して最新情報を取得してください。'),true);
 }
 
 function handleSessionExpired() {
   hideActionToast();
+  diagnosticLog.clear();
   state.loadGeneration += 1;
   repository.dispose();
   state.loading = false;
   if (elements.reloadButton) elements.reloadButton.disabled = false;
   clearDisplayedData();
   elements.login?.classList.remove('hidden');
+  diagnosticLog.record('friends',{status:401});
   setStatus(t('VRChatのログインセッションが無効です。VRChat公式サイトで再ログインしてください。'), true);
 }
 
@@ -2980,12 +2532,13 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     loadDebugData();
     return;
   }
-  if (state.loading || state.favoriteMutationPending || state.pendingInvites.size) return;
+  if (state.loading || state.favoriteMutationPending || state.pendingInvites.size || notificationBusy) return;
+  if(reason==='automatic' && automaticRefreshBlocked())return;
   state.favoriteGroupEditor = null;
   actionToast.setUndoBusy(true);
   state.offlineLoadToken += 1;
   repository.dispose();
-  repository = new DataRepository(new VrchatApiClient(), uiStorage);
+  repository = new DataRepository(new VrchatApiClient(CONFIG.API_BASE,{onAccountChanged:handleAccountChanged}), uiStorage);
   const dataRepository = repository;
   const generation = ++state.loadGeneration;
   state.initialWorldPreviews.clear();
@@ -2995,10 +2548,9 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
   state.loading = true;
   state.loadFailed = false;
   state.groupLoadFailed = false;
-  if (elements.reloadButton) elements.reloadButton.disabled = true;
+  updateReloadButton();
   if (['manual', 'cache', 'restore'].includes(reason)) scheduleAutoRefresh();
   state.dataFromCache = false;
-  state.lastLoadedAt = 0;
   dataRepository.usedStaleFallback = false;
   elements.login?.classList.add('hidden');
   if (notify) {
@@ -3017,13 +2569,15 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     const previousWorlds = worldFavorites;
     state.recent.token += 1; state.recent.loading = false; worldView.token++; worldView.loading=false;
     state.user = user;
+    if(notifications?.account!==user.id){notifications?.dispose();notifications=new NotificationStore(dataRepository.api,user.id);}else {await notifications.inflight;if(!current())return;notifications.disposed=false;notifications.api=dataRepository.api;}
+    if(notificationLocal.account!==user.id){notificationImageSaves.clear();notificationLocal.select(user.id);}
+    if(iconFrames.account!==user.id)iconFrames.reset(user.id);
     worldFavorites = new WorldFavorites(dataRepository.api, user);
     worldFavorites.account = user.id;
     if (previousWorlds?.account === user.id && previousWorlds.hasVrcPlus === worldFavorites.hasVrcPlus) {
       worldFavorites.groups = previousWorlds.groups; worldFavorites.records = previousWorlds.records;
       worldFavorites.ready = previousWorlds.ready; worldFavorites.updatedAt = previousWorlds.updatedAt;
     }
-
 
     // Do not paint stale cached lists first. Fetch the time-sensitive primary
     // datasets first so the first interactive render reflects current data (or
@@ -3054,6 +2608,7 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     state.loading = false;
     render();
     if (state.viewMode === VIEW_MODES.RECENT) void loadWorldView({ force: reason !== 'initial' });
+    void loadNotifications(reason!=='initial');
     updateLoadedAtLabel();
     setStatus('');
     if (notify) {
@@ -3073,6 +2628,7 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     if (error?.status === 401) handleSessionExpired();
     else {
       state.loadFailed = true;
+      updateLoadedAtLabel();
       const message = readFailureMessage('friends', error);
       setStatus(message, true);
       if (notify) showActionToast(message, { error: true, delay: 5600 });
@@ -3111,7 +2667,7 @@ function onFriendListClick(event) {
   const item = event.target.closest('.friend-item');
   if (!item || !elements.friendList.contains(item)) return;
   suppressSidebarFriendPreviewUntilLeave(item.dataset.friendId);
-  focusFriendInstance(state.friends.find((friend) => friend.id === item.dataset.friendId));
+  focusFriendInstance(state.friendIndex.get(item.dataset.friendId));
 }
 
 function onFriendListKeydown(event) {
@@ -3120,7 +2676,7 @@ function onFriendListKeydown(event) {
   const item = event.target.closest('.friend-item');
   if (!item) return;
   event.preventDefault();
-  focusFriendInstance(state.friends.find((friend) => friend.id === item.dataset.friendId));
+  focusFriendInstance(state.friendIndex.get(item.dataset.friendId));
 }
 
 document.querySelectorAll('.tab').forEach((button) => {
@@ -3192,6 +2748,20 @@ elements.autoRefresh?.addEventListener('change', () => {
   scheduleAutoRefresh();
 });
 
+elements.settingsMore?.addEventListener('click',()=>{
+  setSettingsAdvanced(elements.settingsAdvanced.hidden);persistUiPreferences();positionSettingsPanel();
+});
+elements.updatedAt?.addEventListener('click',()=>{
+  if(!state.lastLoadedAt)return;
+  state.updatedTimeMode=state.updatedTimeMode==='relative'?'exact':'relative';persistUiPreferences();updateLoadedAtLabel();
+});
+elements.backToTop?.addEventListener('click',()=>{
+  const reduce=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  elements.list.scrollTo({top:0,behavior:reduce?'auto':'smooth'});
+  elements.list.focus({preventScroll:true});
+});
+elements.list?.addEventListener('scroll',updateBackToTop,{passive:true});
+window.addEventListener('resize',updateBackToTop);
 elements.settingsButton?.addEventListener('click', () => {
   toggleSettingsPanel();
 });
@@ -3238,6 +2808,7 @@ function bindSearch(input, callback) {
   input?.addEventListener('input', event => { if (!composing && !event.isComposing) { resetDisplayLimits(); callback(); } });
 }
 bindSearch(elements.friendSearch, renderFriendSidebar);
+elements.showIconFrames.addEventListener('change',()=>{state.showIconFrames=elements.showIconFrames.checked;if(state.showIconFrames)iconFrames.failed=false;persistUiPreferences();render({resetScroll:false});renderNotificationPanel();if(state.friendPreview.location)renderFriendInstancePreview(getCurrentInstanceEntry(state.friendPreview.location));});
 elements.showNonFriendOwners?.addEventListener('change', () => {
   state.showNonFriendOwners = elements.showNonFriendOwners.checked;
   persistUiPreferences(); render({resetScroll:false});
@@ -3345,18 +2916,37 @@ elements.loginButton?.addEventListener('click', () => {
   window.open(CONFIG.LOGIN_URL, '_blank', 'noopener,noreferrer');
 });
 
+elements.copyDiagnosticButton?.addEventListener('click',copyDiagnostics);
+elements.copyStatusDiagnostic?.addEventListener('click',copyDiagnostics);
 elements.recentButton?.addEventListener('click', setRecentView);
+elements.notificationsButton?.addEventListener('click',()=>setNotificationPanelOpen(elements.notificationPanel.classList.contains('hidden')));
+elements.notificationPanel.addEventListener('click',onNotificationClick);
+elements.notificationPanel.addEventListener('scroll',scheduleNotificationProfiles,{passive:true,capture:true});
+elements.notificationPanel.addEventListener('input',saveNotificationMemo);
+elements.notificationPanel.addEventListener('compositionstart',event=>{if(event.target.matches('[data-notification-memo]'))notificationMemoComposing=true;});
+elements.notificationPanel.addEventListener('compositionend',event=>{if(event.target.matches('[data-notification-memo]'))notificationMemoComposing=false;saveNotificationMemo(event);});
+elements.notificationPanel.addEventListener('focusout',event=>{if(event.target.matches('[data-notification-memo]'))queueMicrotask(resumeAutoRefresh);});
+elements.notificationPanel.addEventListener('input',event=>{
+  if(!event.target.matches('[data-notification-text]')||!notificationReply)return;
+  notificationReply.text=event.target.value;
+  const panel=event.target.closest('.notification-reply');panel.querySelector('[data-notification-length]').textContent=`${event.target.value.length} / ${REPLY_MAX_LENGTH}`;
+  panel.querySelector('[data-notification-action="reply"]').disabled=notificationBusy||!event.target.value.trim();
+  const choice=replySlot(notificationReply.rows,event.target.value);panel.querySelector('.notification-reply-note').textContent=t(choice?.update?'入力文をVRChatの返信文枠へ保存して送信します。変更後は約1時間再変更できません。':'返信は最大64文字です。変更可能な返信文枠が必要です。');
+});
 
 function updateReloadButton() {
-  if (elements.reloadButton) elements.reloadButton.disabled = Boolean(state.loading || worldView.loading || state.recent.loading);
+  const loading=Boolean(state.loading || worldView.loading || state.recent.loading || (state.viewMode===VIEW_MODES.RECENT&&worldFavorites?.inflight));
+  elements.reloadButton?.setAttribute('aria-busy',String(loading));
+  if (elements.reloadButton) elements.reloadButton.disabled = Boolean(state.loading || worldView.loading || state.recent.loading || notificationBusy);
 }
 
 async function refreshCurrentView() {
   if (state.loading || worldView.loading || state.recent.loading) return;
-  if (state.favoriteMutationPending || state.pendingInvites.size) {
+  if (state.favoriteMutationPending || state.pendingInvites.size || notificationBusy) {
     showActionToast(t('操作の完了後に更新してください。'));
     return;
   }
+  if(notificationReply || (state.favoriteGroupEditor&&!state.favoriteGroupEditor.outcomeUnknown) || (worldView.editor&&!worldView.editor.unknown)){showActionToast(t('編集を終了してから更新してください。'));return;}
   const needsPrimaryRetry = !state.user || state.loadFailed || state.groupLoadFailed
     || (elements.showOffline?.checked && state.offlineNameLoad.failed);
   if (!needsPrimaryRetry && state.viewMode === VIEW_MODES.RECENT) { worldView.editor=null; await loadWorldView({ force: true }); return; }
@@ -3364,7 +2954,7 @@ async function refreshCurrentView() {
 }
 elements.reloadButton?.addEventListener('click', refreshCurrentView);
 elements.clearCacheButton?.addEventListener('click', async () => {
-  if (state.favoriteMutationPending || state.pendingInvites.size) {
+  if (state.favoriteMutationPending || state.pendingInvites.size || notificationBusy) {
     showActionToast(t('操作の完了後にキャッシュを削除してください。'));
     return;
   }
@@ -3382,6 +2972,8 @@ elements.clearCacheButton?.addEventListener('click', async () => {
   await load({ reason: 'cache', preserveToast: true });
 });
 window.addEventListener('storage', event => {
+  if(event.key&&event.key===notificationLocal.memoKey){notificationLocal.reloadMemo();updateNotificationBadge();renderNotificationPanel();return;}
+  if(event.key&&(event.key===notificationLocal.key||event.key===notificationLocal.key+':image-event')){notificationLocal.reload();updateNotificationBadge();renderNotificationPanel();return;}
   if (event.key !== 'vrc_viewer_cache_clear_event') return;
   hideActionToast();
   state.loadGeneration += 1;
@@ -3395,6 +2987,11 @@ window.addEventListener('storage', event => {
   showActionToast(t('別の画面でキャッシュが削除されました。「更新」で最新情報を取得してください。'), { delay: 8000 });
 });
 window.addEventListener('pagehide', () => {
+  stopUpdatedAtClock();
+  if(notificationBulk)notificationBulk.stop=true;
+  notificationBusy=false;notificationReply=null;
+  elements.notificationPanel.classList.add('hidden');elements.notificationsButton.setAttribute('aria-expanded','false');elements.notificationsButton.classList.remove('active');
+  notifications?.dispose();
   // Invalidate hydration callbacks before aborting their requests. A closing
   // document may still be visible while its abort reactions run.
   hydrationController.stop();
@@ -3411,9 +3008,10 @@ window.addEventListener('pagehide', () => {
   state.recent.token += 1; state.recent.loading = false;
   worldView.token++; worldView.loading = false;
 });
-window.addEventListener('pageshow', event => { if (event.persisted) { imageController.reset(); void load({ reason: 'restore' }); } });
+window.addEventListener('pageshow', event => { startUpdatedAtClock(); if (event.persisted) { imageController.reset(); void load({ reason: 'restore' }); } });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
+    stopUpdatedAtClock();
     clearAutoRefreshTimer();
     state.offlineLoadToken += 1;
     state.offlineNameLoad.loading = false;
@@ -3423,6 +3021,7 @@ document.addEventListener('visibilitychange', () => {
     disconnectSidebarHydrationObserver();
     hideFriendInstancePreview({ immediate: true });
   } else {
+    startUpdatedAtClock();
     scheduleAutoRefresh({ preserveDue: true });
     if (!state.loading && !repository.disposed) {
       hydrationController.sync();
@@ -3434,9 +3033,9 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // Keep the fixed settings dialog outside backdrop-filter containing blocks.
-document.body.append(elements.settingsPanel);
+document.body.append(elements.settingsPanel,elements.notificationPanel);
 captureStaticLabels();
-new ToolbarLayout(document.querySelector('.toolbar'), { onLayout: positionSettingsPanel });
+new ToolbarLayout(document.querySelector('.toolbar'), { onLayout: ()=>{positionSettingsPanel();positionNotificationPanel();} });
 document.getElementById('language').addEventListener('change', event => {
   setLocale(event.target.value);
   persistUiPreferences();
@@ -3444,6 +3043,7 @@ document.getElementById('language').addEventListener('change', event => {
   applySidebarMode();
   renderOfflineSearchStatus();
   updateLoadedAtLabel();
+  setSettingsAdvanced(!elements.settingsAdvanced.hidden);
   renderFriendFilterOptions();
   if (state.favoriteGroupEditor?.error) state.favoriteGroupEditor.error = relocalize(state.favoriteGroupEditor.error);
   setStatus(relocalize(elements.status.textContent), elements.status.classList.contains('error'));
@@ -3458,4 +3058,5 @@ persistUiPreferences();
 applyMainSortOptions();
 updateTabButtons();
 scheduleAutoRefresh();
+startUpdatedAtClock();
 void load();

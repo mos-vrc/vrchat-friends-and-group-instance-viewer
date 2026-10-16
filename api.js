@@ -1,3 +1,5 @@
+import { assertAccount } from './account-session.js';
+import { diagnosticLog } from './diagnostics.js';
 import { t } from './i18n.js';
 import { abortError, waitUntil, waitForVisible } from './request-policy.js';
 import { CONFIG } from './config.js';
@@ -14,7 +16,8 @@ export class ApiError extends Error {
 }
 
 export class VrchatApiClient {
-  constructor(baseUrl = CONFIG.API_BASE) {
+  constructor(baseUrl = CONFIG.API_BASE, {onAccountChanged = () => {}} = {}) {
+    this.expectedAccount = null; this.onAccountChanged = onAccountChanged;
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.controller = new AbortController();
     this.reads = new Map();
@@ -47,6 +50,11 @@ export class VrchatApiClient {
   }
 
   async fetchJsonUnshared(path, options = {}) {
+    try { return await this.fetchJsonRequest(path, options); }
+    catch (error) { diagnosticLog.record('api', error, {path, method: (options.method || 'GET').toUpperCase()}); throw error; }
+  }
+
+  async fetchJsonRequest(path, options = {}) {
     const url = /^https?:\/\//i.test(path) ? path : `${this.baseUrl}${path}`;
     const method = (options.method || 'GET').toUpperCase();
     const signal = this.controller.signal;
@@ -55,6 +63,7 @@ export class VrchatApiClient {
     while (true) {
       if (signal.aborted) throw abortError();
       if (method === 'GET') await waitForVisible(signal);
+      else if (this.expectedAccount) await this.verifyAccount();
       let response;
       try { response = await fetchUsingVrchatSession(url, {
         method, headers: options.headers,
@@ -103,6 +112,7 @@ export class VrchatApiClient {
         : `VRChat API ${response.status}`);
       let rejection = '';
       try { rejection = JSON.parse(response.text)?.error?.message || ''; } catch {}
+      error.apiMessage = String(rejection).slice(0,300);
       error.apiOriginRejected = response.status === 403 && /^Origin .+ not acceptable$/i.test(rejection.trim());
       error.apiHeadersUnavailable = response.code === 'API_HEADERS_UNAVAILABLE';
       error.code = response.code;
@@ -110,6 +120,11 @@ export class VrchatApiClient {
       error.outcomeUnknown = method !== 'GET' && !error.apiHeadersUnavailable && (response.outcomeUnknown || response.status === 0 || response.status >= 500);
       throw error;
     }
+  }
+
+  async verifyAccount(expected = this.expectedAccount) {
+    try { return assertAccount(await this.fetchMe(), expected); }
+    catch (error) { if (error.code === 'ACCOUNT_CHANGED') this.onAccountChanged(error); throw error; }
   }
 
   fetchMe() {
@@ -432,6 +447,7 @@ export class DataRepository {
     this.offlinePages.clear();
     for (const cache of [this.userDetailCache, this.instanceCache, this.worldCache, this.groupCache]) cache?.dispose();
     this.currentUserId = userId;
+    this.rawApi.expectedAccount = userId;
     this.userDetailCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.USER_DETAIL_CACHE_KEY, userId), CONFIG.USER_DETAIL_CACHE_MAX_ENTRIES);
     this.instanceCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.INSTANCE_CACHE_KEY, userId), 200);
     this.worldCache = new ObjectCache(this.storage, accountCacheKey(CONFIG.WORLD_CACHE_KEY, userId), 500);
@@ -483,6 +499,7 @@ export class DataRepository {
         id: data?.id || userId,
         displayName: data?.displayName || data?.username || userId,
         username: data?.username || '',
+        iconFrame: typeof data?.iconFrame==='string'?data.iconFrame:'',
         iconUrl: data?.iconUrl || '',
         userIcon: data?.userIcon || '',
         currentAvatarThumbnailImageUrl: data?.currentAvatarThumbnailImageUrl || '',
@@ -584,6 +601,7 @@ export class DataRepository {
       const previous = this.cachedUserProfile(friend.id);
       const profile = { ...previous, id: friend.id, displayName: friend.displayName, isFriend: true };
       for (const key of ['username', 'iconUrl', 'userIcon', 'currentAvatarThumbnailImageUrl', 'profilePicOverride', 'imageUrl']) profile[key] = friend[key] || '';
+      if(Object.hasOwn(friend,'iconFrame'))profile.iconFrame=typeof friend.iconFrame==='string'?friend.iconFrame:'';
       profile.last_activity = typeof friend.last_activity === 'string' ? friend.last_activity : '';
       profile.lastActivityCheckedAt = Date.now();
       // Timestamp is display metadata. Current presence still comes from live IDs.

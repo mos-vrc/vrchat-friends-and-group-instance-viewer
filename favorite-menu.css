@@ -1,0 +1,75 @@
+.favorite-menu {
+  position: fixed;
+  z-index: 1800;
+  min-width: min(188px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 5px;
+  border: 1px solid rgba(133, 180, 218, .28);
+  border-radius: 8px;
+  background: rgba(9, 16, 27, .98);
+  box-shadow: 0 12px 34px rgba(0,0,0,.48);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.favorite-menu-item {
+  width: 100%;
+  min-height: 30px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+.favorite-menu-item:hover:not(:disabled),
+.favorite-menu-item:focus-visible {
+  background: rgba(69, 187, 214, .14);
+}
+.favorite-menu-item:disabled { opacity: .55; cursor: wait; }
+.favorite-menu-item.is-current { color: #8ee9f2; }
+.favorite-menu-check { text-align: center; font-weight: 900; }
+.favorite-menu-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.favorite-menu-separator { height: 1px; margin: 4px 3px; background: rgba(142, 180, 224, .18); }
+.favorite-menu-remove { color: #ef9aa0; }
+.favorite-menu-remove:hover:not(:disabled), .favorite-menu-remove:focus-visible { background: rgba(212, 76, 86, .13); }
+body[data-theme="light"] .favorite-menu {
+  border-color: #d2dae2;
+  background: rgba(255,255,255,.99);
+  box-shadow: 0 12px 30px rgba(31,42,55,.20);
+}
+body[data-theme="light"] .favorite-action-button.favorite-badge:not(.is-favorite) {
+  background: #1d2630;
+  box-shadow: 0 0 0 1px rgba(50, 63, 75, .38), 0 2px 6px rgba(31,42,55,.18);
+}
+body[data-theme="ash"] .favorite-menu { background: rgba(30,31,34,.99); border-color: #4a4d55; }
+body[data-theme="dark"] .favorite-menu { background: rgba(17,18,20,.99); border-color: #3d4047; }
+
+
+
+/* Keep the invoking badge highlighted while the pointer is inside its menu. */
+body[data-theme] .favorite-action-button.favorite-badge.is-favorite-menu-open {
+  box-shadow: 0 0 0 2px rgba(85, 216, 237, .70), 0 2px 8px rgba(0,0,0,.38);
+}
+body[data-theme] .world-favorite-button.favorite-badge.is-favorite-menu-open {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+:is(.favorite-action-button,.world-favorite-button).favorite-badge.is-favorite-menu-open:not(.is-favorite)::after {
+  content: '+';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #dce8ef;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+}

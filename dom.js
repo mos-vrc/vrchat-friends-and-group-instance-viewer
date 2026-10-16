@@ -7,7 +7,8 @@ function key(node) {
     || (data.location ? 'location:' + data.location : '')
     || (data.friendGroup ? 'group:' + data.friendGroup : '')
     || (data.worldId ? 'world:' + data.worldId : '')
-    || (data.worldTab ? 'world-tab:' + data.worldTab : '');
+    || (data.worldTab ? 'world-tab:' + data.worldTab : '')
+    || (data.notificationRow ? 'notification:' + data.notificationRow : '');
 }
 
 export function patchElement(current, next) {

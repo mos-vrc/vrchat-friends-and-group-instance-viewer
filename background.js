@@ -1,3 +1,4 @@
+import { allowedNotificationWrite } from './notifications.js';
 import { buildApiHeaderRules } from './api-header-rules.js';
 import { CONFIG } from './config.js';
 import { isAllowedApiUrl, SharedRequestGate, withTimeout } from './request-policy.js';
@@ -22,7 +23,7 @@ async function ensureApiUserAgentRule() {
   apiRulePromise = (async () => {
     try {
       await withTimeout(chrome.declarativeNetRequest.updateSessionRules({
-        removeRuleIds: [API_USER_AGENT_RULE_ID, 1002, 1003, 1004, 1005],
+        removeRuleIds: buildApiHeaderRules(chrome.runtime.id, buildApiUserAgent()).map(rule=>rule.id),
         addRules: buildApiHeaderRules(chrome.runtime.id, buildApiUserAgent()),
       }), CONFIG.API_SETUP_TIMEOUT_MS || 5000);
       apiRuleError = "";
@@ -56,10 +57,11 @@ async function handleApiFetch(message, tabId) {
   const requestUrl=new URL(message.url);
   // Keep exact write routes enforced even though declarative filters are broad.
   if (method !== 'GET' && requestUrl.search) return { ok:false,status:400,text:'' };
-  if (method === 'POST' && requestUrl.pathname !== '/api/1/favorites'
+  const notificationWrite=allowedNotificationWrite(requestUrl.pathname,method,message.body);
+  if (!notificationWrite && method === 'POST' && requestUrl.pathname !== '/api/1/favorites'
     && !/^\/api\/1\/invite\/myself\/to\/[^?#]+$/.test(requestUrl.pathname)) return { ok:false,status:400,text:'' };
-  if (method === 'DELETE' && !/^\/api\/1\/favorites\/fvrt_[A-Za-z0-9_-]+$/.test(requestUrl.pathname)) return { ok:false,status:400,text:'' };
-  if (method === 'PUT') {
+  if (!notificationWrite && method === 'DELETE' && !/^\/api\/1\/favorites\/fvrt_[A-Za-z0-9_-]+$/.test(requestUrl.pathname)) return { ok:false,status:400,text:'' };
+  if (!notificationWrite && method === 'PUT') {
     const url = new URL(message.url);
     let body;
     try { body = JSON.parse(message.body); } catch { return { ok: false, status: 400, text: '' }; }

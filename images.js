@@ -42,6 +42,10 @@ export class ImagePool {
       this.trim();
     }};
   }
+  retryFailed(raw) {
+    const url=safeImageUrl(raw),entry=this.entries.get(url);
+    if(entry?.state==='error')this.entries.delete(url);
+  }
   prioritize(urls) {
     const rank=new Map(urls.map((url,index)=>[url,index]));
     this.queue.sort((a,b)=>(rank.get(a.url)??Infinity)-(rank.get(b.url)??Infinity));

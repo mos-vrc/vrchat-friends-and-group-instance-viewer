@@ -1,3 +1,4 @@
+import { requireAccount } from './account-session.js';
 import { CONFIG } from './config.js';
 import { worldIsUnavailable } from './world-catalog.js';
 // World lists are separate from friend lists. Keep only a same-account memory
@@ -17,7 +18,9 @@ export class WorldFavorites {
   }
   async loadSelected(group, current=()=>true) {
     if(!validGroup(group) || (group.type==='vrcPlusWorld'&&!this.hasVrcPlus))throw new Error('World Favorite list unavailable');
+    await requireAccount(this.api,this.account);
     const response=await this.api.fetchJson(`/favorites/groups/${group.type}/${encodeURIComponent(group.name)}`);
+    await requireAccount(this.api,this.account);
     const rows=response?.favorites;
     if(!Array.isArray(rows) || !Number.isInteger(response.totalCount) || response.totalCount!==rows.length
       || rows.some(r=>!r || !/^fvrt_[A-Za-z0-9_-]+$/.test(r.id||'') || !validId(r.favoriteId)
@@ -35,6 +38,7 @@ export class WorldFavorites {
     return this.read(false);
   }
   async read(includeRecords=true) {
+    await requireAccount(this.api,this.account);
     const groups=[],limits=new Map(),capacities=new Map();
     // The website uses the current user's system_supporter tag for active
     // VRC+. Slot limits alone may be nonzero for non-members. Early-adopter
@@ -127,6 +131,7 @@ export class WorldFavorites {
     }catch(error){
       this.progressRecords=new Map();this.progressGroups=[];notify();throw error;
     }
+    await requireAccount(this.api,this.account);
     const worldGroups=buildGroups(records);
     this.groups=worldGroups;this.records=records;if(includeRecords){this.previews.clear();this.ready=true;this.updatedAt=Date.now();this.progressRecords=new Map();this.progressGroups=[];notify()}return this;
   }
@@ -149,6 +154,7 @@ export class WorldFavorites {
     if(this.pending || !/^usr_[A-Za-z0-9_-]+$/.test(this.account||'') || !name || name.length>20 || /[\r\n\u0000]/.test(name))throw new Error('Invalid world list name');
     this.pending=true;
     try {
+      await requireAccount(this.api,this.account);
       if(!this.ready)await this.load(true);else await this.refreshGroups();
       const group=this.groups.find(g=>g.key===key);
       if(!group || group.label!==expectedLabel){const e=new Error('World list changed elsewhere');e.favoriteConflict=true;throw e}
@@ -208,6 +214,7 @@ export class WorldFavorites {
     if(desired.some(r=>r.type==='vrcPlusWorld'&&!this.hasVrcPlus))throw new Error('World Favorite list unavailable');
     this.pending=true;
     try {
+      await requireAccount(this.api,this.account);
       try{await this.refreshMembership(worldId)}catch(error){error.favoriteNoMutation=true;throw error}
       const previous=this.current(worldId);
       if(signature(previous)!==signature(expected)) {const e=new Error('World Favorite changed elsewhere');e.favoriteConflict=true;throw e}

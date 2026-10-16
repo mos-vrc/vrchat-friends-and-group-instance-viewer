@@ -4,7 +4,7 @@
     "description": "Extension product name; shared across languages."
   },
   "extensionDescription": {
-    "message": "View online VRChat friends and Friend / Group instances, manage Favorites, and find where your friends are.",
+    "message": "Unofficial VRChat viewer for friends, instances, Favorite worlds and notifications, with Favorite and invite management.",
     "description": "Description shown by Chrome in extension management."
   },
   "extensionActionTitle": {

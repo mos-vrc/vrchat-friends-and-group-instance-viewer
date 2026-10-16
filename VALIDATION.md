@@ -1,7 +1,13 @@
-# Validation — v1.6.5.18
+# 検証 — v1.6.7.2
 
-Production UI served in Linux test Chromium with controlled API responses. Installed-extension startup, live VRChat writes and Windows 11 rendering are not verified.
+2026-10-16。フレームを表示枠の115%、ユーザー画像を約88.5%とし、上下左右の中心を揃えて外周の飾りを均等にクリップする。
 
-Recent now uses the same world-list-heading container as Favorite lists. Eighteen combinations of Japanese/English, Small/Medium/Large and widths 360/620/1280px confirm identical heading text top coordinates (less than 1px difference) when switching views. The Favorite edit button retains at least 5px separation below the world-tabs divider and no page overflow occurs. The list editor still opens and cancels correctly. The rendered heading was visually inspected. No browser page errors occurred.
+- 最新の撮影用実画面5項目すべて成功。6テーマ、2形式×3サイズ、フレームOFF/ONの中心一致、1・1.25・1.5・2倍でのフレーム中央配置・均等なクリップ・画像全体の枠内配置を検査。ダミー通知7件＋保存通知1件、日英、メモ、再読み込み、初期ONと切替、外部通信0件、API入口4経路の拒否も確認。
+- 通常版と撮影用のフレームCSSは共通。直前のフレーム100%版では通常版Chrome実画面54項目が成功。今回の変更はフレームCSS、初期テーマと文書。
+- 撮影用フレームは公式VRChat Wikiの4種類の静止プレビューPNG。中央の見本人物をCSSマスクで隠して仮ユーザー画像に重ねる。出典とSHA-256を同梱。
+- 通知通信17項目、保存・移行・再試行、ピン/メモ/緑丸、イベント・ポストURLなどの既存検証結果を継承。
+- JS構文、JSON、モジュール/CSS依存、バージョン、3種類のZIP、ハッシュを再確認。通常版の権限・CSPは変更なし。撮影用にホスト権限・DNR権限はない。
 
-Release, Chrome Web Store and local-only screenshot packages are produced. Versions, JavaScript syntax, local imports, production-only contents, ZIP integrity and packaged SHA-256 hashes are verified.
+Chrome Headless Shellとローカルfixtureを使用。撮影用の最新表示を目視確認。実アカウント・Windows固有表示・ストア審査は未検証。
+
+初期テーマはアッシュ。新規起動時の選択状態と、既存テーマ選択の再読み込み後の維持を実画面で検証。

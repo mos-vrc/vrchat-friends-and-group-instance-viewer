@@ -1,3 +1,4 @@
+import { allowedNotificationWrite } from './notifications.js';
 import { CONFIG } from './config.js';
 import { buildApiHeaderRules } from './api-header-rules.js';
 import { abortError, createCooldownStore, isAllowedApiUrl, retryAfterDeadline, withTimeout } from './request-policy.js';
@@ -35,6 +36,7 @@ function allowedWrite(url, method, text) {
   const u = new URL(url);
   if (method === 'GET') return true;
   if (u.search) return false;
+  if (allowedNotificationWrite(u.pathname, method, text)) return true;
   if (method === 'POST') return u.pathname === '/api/1/favorites' || /^\/api\/1\/invite\/myself\/to\/[^?#]+$/.test(u.pathname);
   if (method === 'DELETE') return /^\/api\/1\/favorites\/fvrt_[A-Za-z0-9_-]+$/.test(u.pathname);
   if (method !== 'PUT') return false;

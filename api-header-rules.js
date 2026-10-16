@@ -14,5 +14,9 @@ export function buildApiHeaderRules(extensionId, userAgent) {
   origin(1002,'|https://vrchat.com/api/1/favorites|',['post']),
   origin(1003,'|https://vrchat.com/api/1/favorites/fvrt_*',['delete']),
   origin(1004,'|https://vrchat.com/api/1/favorite/group/',['put']),
-  origin(1005,'|https://vrchat.com/api/1/invite/myself/to/',['post'])];
+  origin(1005,'|https://vrchat.com/api/1/invite/myself/to/',['post']),
+  origin(1006,'|https://vrchat.com/api/1/auth/user/notifications/',['put']),
+  origin(1007,'|https://vrchat.com/api/1/invite/',['post']),
+  origin(1008,'|https://vrchat.com/api/1/notifications/',['post']),
+  origin(1009,'|https://vrchat.com/api/1/message/',['put'])];
 }

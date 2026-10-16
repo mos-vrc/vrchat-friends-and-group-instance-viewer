@@ -1,0 +1,80 @@
+.notifications-button {position:relative;overflow:visible;}
+.notifications-button svg {width:19px;height:19px;flex:none;}
+.notification-count {position:absolute;right:-5px;top:-5px;min-width:16px;height:16px;padding:0 3px;box-sizing:border-box;border-radius:9px;background:#b82f45;color:#fff;font:bold 10px/16px system-ui;text-align:center;pointer-events:none;}
+.notification-count[hidden] {display:none;}
+.notification-view {padding:0 10px 12px;min-width:0;}
+.notification-view h2 {font-size:16px;margin:4px 0 12px;}
+.notification-status {font-size:12px;margin-bottom:8px;}
+.notification-card {margin-bottom:8px;padding:10px;border:1px solid var(--line);border-radius:8px;min-width:0;background:var(--panel);overflow-wrap:anywhere;}
+.notification-heading {display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px;}
+.notification-heading strong {min-width:0;}
+.notification-heading span,.notification-heading time {font-size:11px;color:var(--text-muted);}
+.notification-card a {color:var(--accent);}
+.notification-card p {white-space:pre-wrap;margin:6px 0;font-size:13px;}
+.notification-world {margin-top:6px;font-size:12px;}
+.notification-actions {display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center;}
+.notification-actions button,.notification-actions>a,.notification-reply button {font:inherit;font-size:12px;padding:5px 9px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:inherit;cursor:pointer;text-decoration:none;}
+.notification-actions button:disabled,.notification-reply button:disabled {opacity:.55;cursor:default;}
+.notification-actions button:hover:not(:disabled),.notification-reply button:hover:not(:disabled) {border-color:var(--accent);}
+.notification-actions button:focus-visible,.notification-reply button:focus-visible {outline:2px solid var(--focus-ring);outline-offset:2px;}
+.notification-reply {display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px;}
+.notification-reply label {display:flex;flex-direction:column;gap:4px;min-width:0;max-width:100%;font-size:12px;}
+.notification-reply select {max-width:100%;width:min(420px,100%);color:inherit;background:var(--panel);font:inherit;}
+
+.notification-panel {z-index:60;padding:0;display:flex;flex-direction:column;overflow:hidden;overscroll-behavior:contain;}
+.notification-panel-header {position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--panel);border-bottom:1px solid var(--line);}
+.notification-panel-header h2 {margin:0;font-size:14px;}
+.notification-panel-header>div {display:flex;gap:6px;}
+.notification-panel-header button {font:inherit;font-size:18px;width:28px;height:28px;padding:0;color:inherit;background:transparent;border:1px solid var(--line);border-radius:5px;cursor:pointer;}
+.notification-panel-header button:disabled {opacity:.5;cursor:default;}
+.notification-panel .notification-view {padding:10px;min-height:0;flex:1 1 auto;overflow-x:hidden;overflow-y:auto;scrollbar-gutter:stable;scrollbar-width:thin;overscroll-behavior:contain;}
+.notification-panel .notification-view::-webkit-scrollbar {width:8px;}
+.notification-panel-header {position:static;flex:0 0 auto;}
+.notification-heading {column-gap:6px;}
+.notification-panel .notification-card {display:flex;gap:10px;align-items:flex-start;}
+.notification-card-content {flex:1;min-width:0;}
+.notification-image {flex:none;width:84px;height:56px;object-fit:cover;border-radius:4px;}
+.notification-title {font-weight:600;font-size:13px;margin-top:5px;color:var(--accent);}
+@media(max-width:460px){.notification-image {width:60px;height:42px;}.notification-panel .notification-card {gap:7px;padding:8px;}}
+
+.notification-avatar {width:84px;height:56px;flex:none;overflow:hidden;border-radius:4px;background:var(--panel);}
+.notification-avatar>a {display:block;width:100%;height:100%;}
+.notification-avatar .notification-image {display:block;width:100%;height:100%;object-fit:cover;object-position:center;}
+.notification-avatar-placeholder {display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:rgba(128,148,170,.15);color:var(--text-muted);}
+.notification-avatar-placeholder svg {width:30px;height:30px;}
+@media(max-width:460px){.notification-avatar {width:60px;height:42px;}}
+.notification-panel-header .reload-icon {width:18px;height:18px;display:block;margin:auto;}
+.notification-reply label {width:100%;}
+.notification-reply textarea {width:100%;box-sizing:border-box;resize:vertical;min-height:56px;max-height:140px;max-width:100%;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:6px;font:inherit;}
+.notification-reply-note {width:100%;font-size:11px;color:var(--text-muted);}
+.notification-bulk {position:sticky;bottom:0;z-index:3;background:var(--panel);border-top:1px solid var(--line);padding:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+.notification-bulk p {width:100%;margin:0;font-size:12px;}
+.notification-bulk button {font:inherit;font-size:12px;padding:6px 10px;border:1px solid var(--line);border-radius:5px;color:inherit;background:var(--panel);cursor:pointer;}
+.notification-bulk button:disabled {opacity:.5;cursor:default;}
+
+.notification-count.is-memo {background:#23834c;min-width:9px;width:9px;height:9px;padding:0;right:-2px;top:-2px;}
+.notification-pin {margin-left:auto;flex:none;width:26px;height:26px;padding:4px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--muted);cursor:pointer;}
+.notification-pin svg {width:16px;height:16px;display:block;}
+.notification-pin.is-pinned {color:var(--accent);border-color:var(--accent);}
+.notification-card.is-pinned {border-color:var(--accent);}
+.notification-pin:focus-visible,.notification-memo textarea:focus-visible {outline:2px solid var(--focus-ring);outline-offset:2px;}
+.notification-pin:disabled {opacity:.5;cursor:default;}
+.notification-footer {position:static;flex:0 0 auto;background:var(--panel);}
+.notification-footer .notification-bulk {position:static;}
+.notification-bulk .notification-memo-toggle {width:28px;height:28px;padding:5px;display:flex;align-items:center;justify-content:center;}
+.notification-memo-toggle svg {width:16px;height:16px;}
+.notification-memo {padding:0 10px 8px;font-size:12px;}
+.notification-memo-input {position:relative;width:100%;}
+.notification-memo [data-notification-memo-length] {position:absolute;right:10px;bottom:6px;padding:0 2px;background:var(--panel);color:var(--muted);font-size:11px;line-height:14px;pointer-events:none;}
+.notification-memo textarea {display:block;width:100%;height:76px;min-height:76px;max-height:76px;box-sizing:border-box;resize:none;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:5px;padding:6px 6px 24px;font:inherit;line-height:18px;}
+.notification-memo textarea::placeholder {color:var(--muted);opacity:.7;}
+.notification-memo-status {font-size:11px;color:var(--muted);}
+.notification-memo-status:empty {display:none;}
+
+.notification-view {overflow-anchor:none;}
+
+.notification-saved-label {font-size:11px;color:var(--text-muted);margin-top:5px;}
+
+/* Keep transparent notification artwork legible across every theme.
+   Match the Dark theme panel and the saved-thumbnail composite. */
+.notification-image,.notification-avatar {background:#1b1c1f;}

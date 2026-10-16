@@ -1,3 +1,4 @@
+import { diagnosticLog } from './diagnostics.js';
 import { t } from './i18n.js';
 
 // Read failures share the toolbar refresh action. Never use this for writes:
@@ -12,6 +13,7 @@ const readFailures = Object.freeze({
 });
 
 export function readFailureMessage(kind, error) {
+  diagnosticLog.record(kind,error);
   if (error?.status === 429) {
     return t('アクセスが集中しています。少し時間をおいて更新ボタンで再取得してください。');
   }

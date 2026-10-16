@@ -6,6 +6,7 @@ export class ActionToast {
     this.root = root;
     this.message = '';
     this.error = false;
+    this.copyError = null;
     this.messageTimer = null;
     this.undoTimer = null;
     this.undo = null;
@@ -27,10 +28,11 @@ export class ActionToast {
     }));
   }
 
-  show(message, { error = false, delay = 2800 } = {}) {
+  show(message, { error = false, delay = 2800, copyError = null } = {}) {
     clearTimeout(this.messageTimer);
     this.message = String(message || '').trim();
     this.error = Boolean(error);
+    this.copyError = error ? copyError : null;
     this.render();
     if (delay > 0) this.messageTimer = setTimeout(() => {
       this.message = ''; this.error = false; this.render();
@@ -85,7 +87,14 @@ export class ActionToast {
     let notice = root.querySelector('.action-toast-message');
     if (this.message) {
       if (!notice) { notice = document.createElement('div'); notice.className = 'action-toast-message'; root.prepend(notice); }
-      notice.textContent = this.message;
+      let text=notice.querySelector('span');
+      if(!text){text=document.createElement('span');notice.replaceChildren(text);}
+      text.textContent=this.message;
+      let copy=notice.querySelector('[data-copy-error]');
+      if(this.copyError){
+        if(!copy){copy=document.createElement('button');copy.type='button';copy.dataset.copyError='true';copy.addEventListener('click',()=>this.copyError?.());notice.append(copy);}
+        copy.textContent=t('エラー情報をコピー');
+      }else copy?.remove();
     } else notice?.remove();
     let row = root.querySelector('.action-toast-undo');
     if (this.undo) {
