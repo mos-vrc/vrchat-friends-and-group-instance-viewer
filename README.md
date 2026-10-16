@@ -12,9 +12,8 @@ VRChatのフレンドの居場所、Friend / Groupインスタンス、Favorite�
 
 Chrome Web Storeからインストールし、同じChromeでVRChat公式サイトへログインしてから拡張機能ボタンを押してください。専用の一覧ページが開きます。
 
-手動で導入する場合は通常版（`_release.zip`）を展開し、`chrome://extensions`でデベロッパーモードを有効にして「パッケージ化されていない拡張機能を読み込む」からmanifest.jsonがあるフォルダを選択します。GitHub用ZIPにはそのまま実行できるES Modulesのソースと説明文書を含みます。フレームワークやコンパイルは不要です。
+手動で導入する場合は通常版（`_release.zip`）を展開し、`chrome://extensions`でデベロッパーモードを有効にして「パッケージ化されていない拡張機能を読み込む」からmanifest.jsonがあるフォルダを選択します。フレームワークやコンパイルは不要です。
 
-`_webstore.zip`はChrome Web Store提出用です。`_screenshot_build.zip`は仮データ専用で、通常利用やストア提出には使わないでください。
 
 ## フレンドとインスタンス
 
