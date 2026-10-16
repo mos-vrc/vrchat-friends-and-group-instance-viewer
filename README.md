@@ -82,7 +82,7 @@ Twitter / X [@mos_vrc](https://x.com/mos_vrc)
 
 An unofficial Chrome extension for VRChat friends, instances, Favorite worlds and notifications. Install from the Chrome Web Store, sign in to VRChat in the same Chrome browser, then click the extension icon. Japanese and English are supported; your saved choice takes priority over browser language. Dates use your browser time zone.
 
-The release ZIP contains runnable source and documentation; no compilation is required. The Web Store ZIP is for submission. The Screenshot ZIP uses bundled synthetic data and does not access the VRChat API. See PRIVACY.md, SECURITY.md, VALIDATION.md and CHANGELOG.md for data handling, verification limits and release notes.
+The release ZIP contains runnable source and documentation; no compilation is required. See PRIVACY.md, SECURITY.md, VALIDATION.md and CHANGELOG.md for data handling, verification limits and release notes.
 
 アイコンフレームを中央に配置し、円形部分を大きく表示します。表示枠からはみ出す外周の飾りは切り取ります。
 
