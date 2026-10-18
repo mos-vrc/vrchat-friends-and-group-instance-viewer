@@ -25,7 +25,7 @@ import { CONFIG, PERMISSIONS, SORTS, TABS } from "./config.js";
 import { JsonStorage } from "./storage.js";
 import { DataRepository, VrchatApiClient } from "./api.js";
 import { InstanceHydrationController } from "./hydration.js";
-import { buildLocations, classifyPermission, createFriendLocationMap, deriveCanJoin, escapeHtml, filterAndSortInstances, friendIsOnline, instanceOwnerId, mergeInstanceData, needsNonFriendOwnerProfile, nonFriendOwnerForEntry, normalizeFriends, onlineStatusInfo, permissionLabel, participantsForEntry, resolveFriendLocation, sortParticipants, safeImageUrl, sizedImageUrl } from "./domain.js";
+import { buildLocations, instanceNeedsDetails, classifyPermission, createFriendLocationMap, deriveCanJoin, escapeHtml, filterAndSortInstances, friendIsOnline, instanceOwnerId, mergeInstanceData, needsNonFriendOwnerProfile, nonFriendOwnerForEntry, normalizeFriends, onlineStatusInfo, permissionLabel, participantsForEntry, resolveFriendLocation, sortParticipants, safeImageUrl, sizedImageUrl } from "./domain.js";
 
 const elements = {
   status: document.getElementById('status'),
@@ -127,6 +127,7 @@ const state = {
   friendIndex: new Map(),
   instances: [],
   initialWorldPreviews: new Set(),
+  groupDetailAttempts: new Set(),
   loading: false,
   loadFailed: false,
   groupLoadFailed: false,
@@ -1210,22 +1211,36 @@ function getCurrentInstanceEntry(location, fallback = null) {
   return state.instances.find((entry) => entry.location === location) || fallback;
 }
 
+// Group summaries are expanded only while their card is actually visible.
+function instanceIsVisible(location) {
+  const panes = [elements.list];
+  if (state.sidebarMode === 'location') panes.push(elements.friendList);
+  return panes.some(pane => {
+    if (!pane || !pane.getClientRects().length) return false;
+    const bounds = pane.getBoundingClientRect();
+    return [...pane.querySelectorAll('[data-location]')].some(card => {
+      if (card.dataset.location !== location) return false;
+      const rect = card.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && rect.bottom > bounds.top
+        && rect.top < bounds.bottom && rect.right > bounds.left && rect.left < bounds.right;
+    });
+  });
+}
+
+function canRequestGroupDetails(entry) {
+  return !state.groupDetailAttempts.has(entry.location)
+    && state.groupDetailAttempts.size < CONFIG.MAX_GROUP_INSTANCE_DETAILS
+    && instanceIsVisible(entry.location);
+}
+
 function needsHydration(entry) {
   if (repository.disposed || state.loading || !entry || entry.debug || entry.permission === PERMISSIONS.PRIVATE) return false;
-
-  // A failed Instance request must become a terminal state for the current
-  // render. Without this guard, `!entry.instanceData` remained true after a
-  // failed request, causing the hydration controller to enqueue the same
-  // location forever. That could monopolize the event loop and freeze the UI.
-  if (!entry.instanceData) {
+  if (instanceNeedsDetails(entry)) {
     if (entry.instanceFetchFailed) return false;
-    return true;
+    return !entry.groupId || canRequestGroupDetails(entry);
   }
-
   if ((!entry.world || entry.world.cacheStale) && !entry.worldFetchFailed
-    && entry.worldId && entry.worldId !== 'offline' && entry.worldId !== 'private') {
-    return true;
-  }
+    && entry.worldId && entry.worldId !== 'offline' && entry.worldId !== 'private') return true;
   return needsNonFriendOwnerProfile(entry, friendMap(), ownerDisplayState());
 }
 
@@ -1294,6 +1309,9 @@ async function hydrateInstance(location, fallbackEntry) {
   const current = () => generation === state.loadGeneration && !dataRepository.disposed;
   let currentEntry = getCurrentInstanceEntry(location, fallbackEntry);
   if (!currentEntry || currentEntry.permission === PERMISSIONS.PRIVATE) return;
+  const needsDetails = instanceNeedsDetails(currentEntry);
+  if (needsDetails && currentEntry.instanceFetchFailed) return;
+  if (needsDetails && currentEntry.groupId && !canRequestGroupDetails(currentEntry)) return;
 
   try {
     // Spend a bounded cold-start budget on visible world previews. Distant
@@ -1324,10 +1342,16 @@ async function hydrateInstance(location, fallbackEntry) {
       }
     }
     let data = currentEntry.instanceData;
-    if (!data) {
+    if (needsDetails) {
+      // The user may have scrolled while a world preview was loading.
+      if (currentEntry.groupId) {
+        if (!canRequestGroupDetails(currentEntry)) return;
+        state.groupDetailAttempts.add(location);
+      }
       try {
         data = await dataRepository.fetchInstance(location);
         if (!current()) return;
+        if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid instance details');
       } catch (error) {
         if (!current() || error?.name === 'AbortError') return;
         if (error?.status === 401) { handleSessionExpired(); return; }
@@ -2308,7 +2332,7 @@ async function refreshGroupDataInBackground(userId, dataRepository, generation) 
     state.instances = state.instances.map(entry => {
       const old = previous.get(entry.location);
       if (!old) return entry;
-      if (old.instanceData) mergeInstanceData(entry, old.instanceData);
+      if (old.instanceData && old.instanceDetailsLoaded !== false) mergeInstanceData(entry, old.instanceData);
       return { ...entry, world: old.world || entry.world,
         ownerUser: old.ownerUser, ownerUserLoaded: old.ownerUserLoaded,
         instanceFetchFailed: old.instanceFetchFailed, worldFetchFailed: old.worldFetchFailed,
@@ -2542,6 +2566,7 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
   const dataRepository = repository;
   const generation = ++state.loadGeneration;
   state.initialWorldPreviews.clear();
+  state.groupDetailAttempts.clear();
   const current = () => generation === state.loadGeneration && !dataRepository.disposed;
   hydrationController.reset();
   state.recent.token += 1; state.recent.loading = false; worldView.token++; worldView.loading=false;
@@ -2866,7 +2891,10 @@ elements.friendList?.addEventListener('mouseover', onFriendSidebarMouseOver);
 elements.friendList?.addEventListener('mousemove', onFriendSidebarMouseMove, { passive: true });
 elements.friendList?.addEventListener('mouseout', onFriendSidebarMouseOut);
 elements.friendList?.addEventListener('mouseleave', onFriendSidebarMouseLeave);
-elements.friendList?.addEventListener('scroll', () => hideFriendInstancePreview({ immediate: true }), { passive: true });
+elements.friendList?.addEventListener('scroll', () => {
+  hideFriendInstancePreview({ immediate: true });
+  if (state.sidebarMode === 'location') scheduleSidebarHydrationSync();
+}, { passive: true });
 elements.list?.addEventListener('keydown',event=>{
   const tab=event.target.closest('[data-world-tab]');if(!tab || !['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
   const tabs=[...elements.list.querySelectorAll('[data-world-tab]')],i=tabs.indexOf(tab);

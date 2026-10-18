@@ -48,7 +48,12 @@ export function safeImageUrl(rawUrl) {
     const url = new URL(rawUrl, 'https://vrchat.com/');
     if (url.protocol !== 'https:') return '';
     const host = url.hostname.toLowerCase();
-    if (!ALLOWED_IMAGE_HOSTS.has(host)) return '';
+    if (host === 's3-us-west-2.amazonaws.com') {
+      // Legacy VRChat thumbnails live in this bucket, not arbitrary S3 buckets.
+      if (url.origin !== 'https://s3-us-west-2.amazonaws.com' || url.username || url.password
+        || !url.pathname.startsWith('/vrc-uploads/images/')
+        || url.pathname === '/vrc-uploads/images/') return '';
+    } else if (!ALLOWED_IMAGE_HOSTS.has(host)) return '';
     return url.href;
   } catch {
     return '';
@@ -321,11 +326,13 @@ export function buildLocations(friendMap, groupInstances, cacheReader = {}) {
 
   for (const [location, friends] of friendMap.entries()) {
     const parsed = parseLocation(location) || {};
+    const cachedInstance = getCachedInstance(location);
     byLocation.set(location, {
       location,
       source: 'friend',
       friends: [...friends],
-      instanceData: getCachedInstance(location),
+      instanceData: cachedInstance,
+      instanceDetailsLoaded: cachedInstance ? true : undefined,
       world: parsed.worldId ? getCachedWorld(parsed.worldId) : null,
     });
   }
@@ -334,13 +341,16 @@ export function buildLocations(friendMap, groupInstances, cacheReader = {}) {
     const location = raw?.location || raw?.instanceId;
     if (!location) continue;
     const current = byLocation.get(location);
-    const instanceData = current?.instanceData || raw;
+    const cachedInstance = current?.instanceDetailsLoaded ? current.instanceData : getCachedInstance(location);
+    const instanceData = cachedInstance || raw;
     const parsed = parseLocation(location) || {};
     byLocation.set(location, {
       location,
       source: current ? 'friend+group' : 'group',
       friends: current?.friends || [],
       instanceData,
+      // Group-list rows are summaries, even if they happen to include users.
+      instanceDetailsLoaded: Boolean(cachedInstance),
       world: current?.world || getCachedWorld(parsed.worldId) || slimWorld(raw?.world),
     });
   }
@@ -374,10 +384,15 @@ export function buildLocations(friendMap, groupInstances, cacheReader = {}) {
   });
 }
 
+export function instanceNeedsDetails(entry) {
+  return Boolean(entry && (!entry.instanceData || entry.instanceDetailsLoaded === false));
+}
+
 export function mergeInstanceData(entry, data) {
   if (!entry || !data) return false;
   const parsed = parseLocation(entry.location) || {};
   entry.instanceData = data;
+  entry.instanceDetailsLoaded = true;
   entry.worldId = data.worldId || parsed.worldId;
   entry.instanceId = data.instanceId || data.id || parsed.instanceId;
   entry.instanceName = data.displayName || data.name || entry.instanceName || '';

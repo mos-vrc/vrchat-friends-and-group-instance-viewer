@@ -71,7 +71,7 @@ export class ImagePool {
   async body(url, signal) {
     const host = new URL(url).hostname;
     const response = await this.fetcher(url, { signal, cache: 'default',
-      credentials: host === 'files.vrchat.cloud' ? 'omit' : 'include',
+      credentials: ['vrchat.com', 'api.vrchat.cloud'].includes(host) ? 'include' : 'omit',
       referrerPolicy: 'no-referrer' });
     if (response.url && !this.allowed(response.url)) {
       await response.body?.cancel(); throw new Error('Invalid image destination');

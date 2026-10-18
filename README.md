@@ -1,19 +1,18 @@
 # VRChat Friends & Group Instance Viewer
 
-**Version: 1.6.7.2**
+**Version: 1.6.7.5**
 
 VRChatのフレンドの居場所、Friend / Groupインスタンス、Favoriteワールド、通知をChromeで確認できる非公式拡張機能です。VRChat Inc.が制作・承認・提供するツールではありません。
 
 - [Chrome Web Store](https://chromewebstore.google.com/detail/vrchat-friends-group-inst/pncejiodjgmlklhgkpclcplgacbohbla)
 - [GitHub](https://github.com/mos-vrc/vrchat-friends-and-group-instance-viewer) / [Booth](https://booth.pm/ja/items/8921102)
-- [更新履歴](CHANGELOG.md) / [プライバシー](PRIVACY.md) / [認証・通信仕様](SECURITY.md) / [検証内容と限界](VALIDATION.md)
+- [更新履歴](CHANGELOG.md) / [プライバシー](PRIVACY.md) / [認証・通信仕様](SECURITY.md) / [対応環境と制約](VALIDATION.md)
 
 ## インストールと起動
 
 Chrome Web Storeからインストールし、同じChromeでVRChat公式サイトへログインしてから拡張機能ボタンを押してください。専用の一覧ページが開きます。
 
-手動で導入する場合は通常版（`_release.zip`）を展開し、`chrome://extensions`でデベロッパーモードを有効にして「パッケージ化されていない拡張機能を読み込む」からmanifest.jsonがあるフォルダを選択します。フレームワークやコンパイルは不要です。
-
+手動で導入する場合は配布ZIPを展開し、`chrome://extensions`でデベロッパーモードを有効にして「パッケージ化されていない拡張機能を読み込む」からmanifest.jsonがあるフォルダを選択します。
 
 ## フレンドとインスタンス
 
@@ -56,14 +55,14 @@ Group通知はピン留めできます。ピン留め中は一覧上部に表示
 
 - 最初は表示サイズ・表示形式・テーマ・自動更新の4項目を表示します。「さらに表示」で言語・並び順・オーナー表示・キャッシュ削除・診断コピーを展開できます。展開状態と設定は保存します。
 - 言語は日本語／英語です。保存済みの選択を優先し、未設定の場合はブラウザの言語から選びます。地域や所在地による判定ではありません。
-- テーマはライト／サンド／ミスト／アッシュ／ダークブルー／ダークの6種類です。
+- テーマはライト／サンド／ミスト／アッシュ／ダークブルー／ダークの6種類です。初期テーマはアッシュで、保存済みの選択を優先します。
 - 自動更新はなし／5分／10分／30分です。更新開始時刻を基準とし、非表示中・編集中・変更操作中は延期します。期限を過ぎた場合は戻ったとき・編集終了後に一度更新します。
 - 更新日時は標準で経過時間を表示し、クリックで時刻表示に切り替えます。表示方式は保存し、正確な日時はtipsでも確認できます。日時はブラウザのタイムゾーンです。
 - 左端の更新ボタンは現在の画面を再取得します。初回起動・更新開始・保存中・完了・失敗を文章で案内します。更新アイコンは回転しません。
 - 右側一覧をスクロールすると「上部へ戻る」ボタンを表示します。
 - 「キャッシュを削除」は表示設定を残して取得データを削除します。VRChat上のFavorite登録は解除しません。
 
-「アイコンフレームを反映」は追加オプション内、オーナー表示の下にあります。標準OFFで、ONにすると取得済みのユーザーの設定に対応するフレームを画像に重ねます。共通一覧と画像キャッシュを再利用し、ユーザーごとの追加取得はしません。画面外・非表示・動きを減らす設定では静止画像を使用します。対応するフレーム情報がない場合は通常アイコンのままです。
+「アイコンフレームを反映」は追加オプション内、オーナー表示の下にあります。標準OFFで、ONにすると取得済みのユーザーの設定に対応するフレームを画像に重ねます。共通一覧と画像キャッシュを再利用し、ユーザーごとの追加取得はしません。画面外・非表示・動きを減らす設定では静止画像を使用します。対応するフレーム情報がない場合は通常アイコンのままです。フレームは中央に配置し、表示枠からはみ出す外周の飾りは切り取ります。
 
 ## 診断情報と認証
 
@@ -71,7 +70,7 @@ Group通知はピン留めできます。ピン留め中は一覧上部に表示
 
 Chromeの既存VRChatログインセッションを使用します。認証Cookieやトークンを拡張機能が読み出し・保存する処理、開発者サーバーへの送信、広告やアクセス解析はありません。取得情報と画像の一部はブラウザ内にキャッシュします。通信・保存の詳細はSECURITY.mdとPRIVACY.mdをご覧ください。
 
-API変更、混雑、公開範囲、アカウント権限により表示や操作ができない場合があります。検証済みの範囲と実環境での未確認事項はVALIDATION.mdに記載しています。
+API変更、混雑、公開範囲、アカウント権限により表示や操作ができない場合があります。対応環境と制約はVALIDATION.mdをご覧ください。
 
 ## お問い合わせ
 
@@ -81,25 +80,5 @@ Twitter / X [@mos_vrc](https://x.com/mos_vrc)
 
 An unofficial Chrome extension for VRChat friends, instances, Favorite worlds and notifications. Install from the Chrome Web Store, sign in to VRChat in the same Chrome browser, then click the extension icon. Japanese and English are supported; your saved choice takes priority over browser language. Dates use your browser time zone.
 
-The release ZIP contains runnable source and documentation; no compilation is required. See PRIVACY.md, SECURITY.md, VALIDATION.md and CHANGELOG.md for data handling, verification limits and release notes.
+See PRIVACY.md and SECURITY.md for data handling, VALIDATION.md for requirements and limitations, and CHANGELOG.md for release notes.
 
-アイコンフレームを中央に配置し、円形部分を大きく表示します。表示枠からはみ出す外周の飾りは切り取ります。
-
-## ソースの構成
-
-- `app.js`：画面の起動、取得・変更操作、状態の更新、イベントの連携。
-- `views.js`：フレンド・インスタンス・ワールドの表示用HTMLと表示グループの組み立て。取得対象の差し替えは明示したgetterから読み取ります。
-- `settings.js`：表示設定の保存・復元、テーマ・サイズ・サイドバー・オプション窓の表示。
-- 通知・Favorite・画像キャッシュ等は、それぞれ既存の専用モジュールで管理します。
-- `index.css`：スタイルの読み込み順を定義する入口です。`styles/base.css`、`themes-contrast.css`、`views.css`、`themes-soft.css`、`layout.css`の順で読み込みます。後続の専用CSSも含め、この順序にはカスケード上の意味があります。
-
-ファイル数の削減を目的にまとめず、機能の境界と依存関係を優先しています。
-
-### v1.6.7.2の改善
-
-アカウント変更を検出した場合は、操作を止めて表示をクリアし、「更新」を案内します。ピン留め画像の保存に失敗した場合は、通知の更新ボタンで再試行できます（同じピンにつきページを開いている間に最大3回）。保存済みのメモ・通知・画像は自動移行し、移行失敗時は元データを保持します。
-
-通知を開いたときのアカウント確認は取得前の1回です。通常通知・Group通知の取得後に追加の確認通信は行いません。
-
-
-初期テーマはアッシュです。保存済みのテーマ選択は維持します。
