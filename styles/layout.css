@@ -252,3 +252,28 @@ body[data-instance-display="simple"] .friend-offline .friend-location-thumb-simp
 .avatar-icon-frame:not([src]),.avatar-icon-frame[data-image-state="error"] {visibility:hidden;}
 .notification-avatar .avatar-frame-wrap {width:56px;height:56px;margin:auto;}
 @media(max-width:460px){.notification-avatar .avatar-frame-wrap {width:42px;height:42px;}}
+
+/* A compact footer appears only on cards with incomplete reads. */
+.instance-load-feedback {grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:4px 8px;padding:3px 6px;min-width:0;box-sizing:border-box;color:var(--muted);font-size:11px;line-height:16px;border-top:1px solid var(--line);}
+.instance-load-feedback > span {min-width:0;overflow-wrap:anywhere;}
+.instance-load-feedback button {flex:none;min-height:24px;max-width:100%;padding:2px 7px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--text);font:inherit;cursor:pointer;}
+.instance-load-feedback button:hover:not(:disabled) {border-color:var(--accent);}
+.instance-load-feedback button:focus-visible {outline:2px solid var(--focus-ring);outline-offset:1px;}
+.instance-load-feedback button:disabled {opacity:.55;cursor:default;}
+
+.instance-load-feedback button {white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.friend-list,.instance-list {overflow-anchor:none;}
+
+body[data-instance-display] .friend-location-item:has(> .instance-load-feedback) {height:auto;row-gap:3px;}
+
+#settingsPanel {container-type:inline-size;container-name:options;}
+@container options (max-width:280px) {
+  .settings-row {flex-wrap:wrap;}
+  .settings-row > .settings-label {flex:1 0 100%;min-width:0;}
+  .settings-row select {min-width:0;width:100%;}
+  .theme-settings .theme-control {flex:0 1 100%;min-width:0;max-width:100%;flex-wrap:wrap;justify-content:flex-start;margin-left:0;}
+  .instance-size-control {max-width:100%;}
+}
+
+.avatar-fallback {background-color:#1b1c1f;}
+img.avatar-fallback[src$="user-placeholder.svg"] {background:#1b1c1f;border-radius:50%;opacity:1;}

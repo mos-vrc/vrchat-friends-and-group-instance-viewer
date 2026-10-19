@@ -153,6 +153,12 @@ export class ImagePool {
   }
 }
 
+const avatarPlaceholderUrl = new URL('./user-placeholder.svg', import.meta.url).href;
+function showImagePlaceholder(image) {
+  if(image.classList.contains('avatar-fallback'))image.src=avatarPlaceholderUrl;
+  else image.removeAttribute('src');
+}
+
 export class ImageController {
   constructor(pool, root = document.body, {preloadPx=840} = {}) {
     this.preloadPx=preloadPx; this.scrollFrame=null;
@@ -170,6 +176,12 @@ export class ImageController {
       if(this.scrollFrame!==null)return;
       this.scrollFrame=requestAnimationFrame(()=>{this.scrollFrame=null;if(!document.hidden)this.sync()});
     },{capture:true,passive:true});
+    this.root.addEventListener('error', event => {
+      const image=event.target;
+      if(image?.matches?.('img.avatar-fallback') && image.src!==avatarPlaceholderUrl){
+        image.dataset.imageState='error';showImagePlaceholder(image);
+      }
+    },true);
     this.sync();
   }
   sync() {
@@ -181,7 +193,7 @@ export class ImageController {
     const candidates=[],clips=new Map();
     for (const image of this.root.querySelectorAll('img[data-image-src]')) {
       if (!this.items.has(image)) {
-        image.removeAttribute('src'); image.dataset.imageState = 'waiting';
+        showImagePlaceholder(image); image.dataset.imageState = 'waiting';
         this.items.set(image, { url: image.dataset.imageSrc }); this.observer.observe(image);
       }
       if(document.hidden)continue;
@@ -215,18 +227,18 @@ export class ImageController {
     if (!item || item.handle || document.hidden || !image.isConnected) return;
     image.dataset.imageState = 'loading';
     try { item.handle = this.pool.acquire(item.url, image.dataset.imageFallbackSrc, {defer:true}); }
-    catch { image.dataset.imageState = 'error'; return; }
+    catch { image.dataset.imageState = 'error'; showImagePlaceholder(image); return; }
     const handle=item.handle;
     handle.promise.then(url => {
       if (this.items.get(image) !== item || item.handle!==handle || !image.isConnected) return;
       image.src = url; image.dataset.imageState = 'ready';
     }, () => {
-      if (this.items.get(image) === item && item.handle===handle && image.isConnected) image.dataset.imageState = 'error';
+      if (this.items.get(image) === item && item.handle===handle && image.isConnected) {image.dataset.imageState = 'error';showImagePlaceholder(image);}
     });
   }
   reset() {
     for (const [image, item] of this.items) {
-      item.handle?.release(); image.removeAttribute('src'); this.observer.unobserve(image);
+      item.handle?.release(); showImagePlaceholder(image); this.observer.unobserve(image);
     }
     this.items.clear(); this.pool.clear(); this.sync();
   }

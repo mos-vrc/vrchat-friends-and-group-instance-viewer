@@ -18,6 +18,7 @@ export function createViews({
   instanceIsHighlighted,
   limitedMarkup,
   needsHydration,
+  getInstanceRetryState = () => ({pending:false,attempts:0}),
   renderFavoriteActionButton,
   renderFramedAvatar,
   renderWorldFavoriteButton,
@@ -83,8 +84,8 @@ export function createViews({
     const isPrivate = permission === PERMISSIONS.PRIVATE || location === 'private';
     const avatarUrl = friendAvatarUrl(friend);
     const avatar = avatarUrl
-      ? `<img class="friend-avatar" data-image-src="${escapeHtml(avatarUrl)}" loading="lazy" decoding="async" alt="">`
-      : '<div class="friend-avatar"></div>';
+      ? `<img class="friend-avatar avatar-fallback" data-image-src="${escapeHtml(avatarUrl)}" loading="lazy" decoding="async" alt="">`
+      : '<img class="friend-avatar avatar-fallback" src="user-placeholder.svg" alt="" decoding="async">';
     const showLocation = state.sidebarMode === 'location';
     const locationData = !isWebsite && !isPrivate && location && location !== 'offline'
       ? ` data-location="${escapeHtml(entry?.location || location)}"`
@@ -249,8 +250,8 @@ export function createViews({
       : escapeHtml(t('最終アクティブ日時不明'));
     const avatarUrl = friendAvatarUrl(friend);
     const avatar = avatarUrl
-      ? `<img class="friend-location-avatar" data-image-src="${escapeHtml(avatarUrl)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
-      : '<div class="friend-location-avatar friend-location-avatar-empty"></div>';
+      ? `<img class="friend-location-avatar avatar-fallback" data-image-src="${escapeHtml(avatarUrl)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
+      : '<img class="friend-location-avatar friend-location-avatar-empty avatar-fallback" src="user-placeholder.svg" alt="" decoding="async">';
     const profileUrl = CONFIG.DEBUG_MODE ? '' : buildUserProfileUrl(friend.id);
     const framed=renderFramedAvatar(friend,avatar);
     const avatarContent = profileUrl
@@ -332,11 +333,12 @@ export function createViews({
         <div class="friend-location-meta">${locationMeta}</div>
       </div>
       ${thumbWrapped}
+      ${entry && !isPrivate && !isOffline && !isWebsite ? renderInstanceFeedback(entry) : ''}
     </article>`;
     // Keep the original labels for restoring Normal tips without rebuilding cards.
     // Favorite controls retain their native tooltip in either display format.
     return markup.replace(/<[^>]+>/g, tag => {
-      if (tag.includes('data-favorite-user-id=')) return tag;
+      if (tag.includes('data-favorite-user-id=') || tag.includes('data-instance-retry=')) return tag;
       return tag.replace(/ title="([^"]*)"/g, (_, label) =>
         ` data-friend-tip="${label}"${state.instanceDisplay === 'normal' ? ` title="${label}"` : ''}`);
     });
@@ -475,8 +477,8 @@ export function createViews({
       );
       const profileUrl = buildUserProfileUrl(user.id);
       const avatar = src
-        ? `<img class="participant-avatar" data-image-src="${escapeHtml(src)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
-        : '<div class="participant-avatar participant-avatar-empty"></div>';
+        ? `<img class="participant-avatar avatar-fallback" data-image-src="${escapeHtml(src)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
+        : '<img class="participant-avatar participant-avatar-empty avatar-fallback" src="user-placeholder.svg" alt="" decoding="async">';
       const framed=renderFramedAvatar(user,avatar);
       const avatarLink = profileUrl
         ? lt`<a class="participant-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="公式プロフィールを開く">${framed}</a>`
@@ -526,8 +528,8 @@ export function createViews({
             const src = friendAvatarUrl(friend);
             const profileUrl = CONFIG.DEBUG_MODE ? '' : buildUserProfileUrl(friend.id);
             const privateAvatar = src
-              ? `<img class="private-avatar" data-image-src="${escapeHtml(src)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
-              : `<div class="private-avatar private-avatar-empty" aria-label="${escapeHtml(name)}"></div>`;
+              ? `<img class="private-avatar avatar-fallback" data-image-src="${escapeHtml(src)}" loading="lazy" decoding="async" alt="${escapeHtml(name)}">`
+              : `<img class="private-avatar private-avatar-empty avatar-fallback" src="user-placeholder.svg" alt="${escapeHtml(name)}" decoding="async">`;
             const framed=renderFramedAvatar(friend,privateAvatar);
             const privateAvatarLink = profileUrl
               ? lt`<a class="private-profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="公式プロフィールを開く">${framed}</a>`
@@ -545,6 +547,14 @@ export function createViews({
       </div>
     </article>`;
     return collapsible ? `<section class="friend-location-section private-instance-section" data-location="${escapeHtml(entry.location)}">${header}<div id="privateInstanceUsers">${body}</div></section>` : body;
+  }
+
+  function renderInstanceFeedback(entry, {preview = false} = {}) {
+    if (!entry || (!entry.instanceFetchFailed && !entry.worldFetchFailed)) return '';
+    const {pending, attempts} = getInstanceRetryState(entry);
+    const limited = attempts >= CONFIG.MAX_INSTANCE_MANUAL_RETRIES;
+    const reason = entry.instanceFetchFailed ? t('インスタンス情報を取得できませんでした。') : t('ワールド情報を取得できませんでした。');
+    return `<div class="instance-load-feedback"><span title="${escapeHtml(reason)}">${escapeHtml(t(pending?'取得中…':'一部取得失敗'))}</span>${preview?'':`<button type="button" data-instance-retry="${escapeHtml(entry.location)}" title="${escapeHtml(t(limited?'次の更新で再試行できます。':'このインスタンスの情報を再取得'))}" aria-label="${escapeHtml(reason+' '+t('再取得'))}"${pending||limited?' disabled':''}${pending?' aria-busy="true"':''}>${escapeHtml(t(pending?'取得中…':'再取得'))}</button>`}</div>`;
   }
 
   function renderInstanceCard(entry, { preview = false } = {}) {
@@ -620,6 +630,7 @@ export function createViews({
 
         ${renderParticipantList(entry, { showAll: preview })}
       </div>
+      ${renderInstanceFeedback(entry, {preview})}
     </article>`;
   }
 

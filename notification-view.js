@@ -34,8 +34,8 @@ export function renderNotificationList({store, state, notificationBusy, notifica
     const groupImage=groupNotification&&!notificationImage?displayImageUrl(groupProfile?.iconUrl||'','avatar'):'';
     const image=row.version===2?(savedImage||notificationImage||groupImage):userThumbnail?friendAvatarUrl(senderProfile||{}):'';
     const person=`<span class="notification-avatar-placeholder" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg></span>`;
-    const imageMarkup=image?`<img class="notification-image" ${savedImage?'src':'data-image-src'}="${escapeHtml(image)}" alt="" decoding="async">`:'';
-    const picture=image?(userThumbnail?renderFramedAvatar(senderProfile,imageMarkup):imageMarkup):person;
+    const imageMarkup=image?`<img class="notification-image${userThumbnail?' avatar-fallback':''}" ${savedImage?'src':'data-image-src'}="${escapeHtml(image)}" alt="" decoding="async">`:'';
+    const picture=image?(userThumbnail?renderFramedAvatar(senderProfile,imageMarkup):imageMarkup):userThumbnail?'<img class="notification-image avatar-fallback" src="user-placeholder.svg" alt="" decoding="async">':person;
     const thumbnail=userThumbnail?`<div class="notification-avatar" data-notification-user-id="${escapeHtml(row.senderUserId||'')}">${profile?`<a href="${escapeHtml(profile)}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(String(sender))}">${picture}</a>`:picture}</div>`:groupImage?`<div class="notification-avatar" ${row.__saved?'':`data-notification-group-id="${escapeHtml(data.groupId||'')}"`}>${picture}</div>`:image?picture:groupNotification?`<div class="notification-avatar" ${row.__saved?'':`data-notification-group-id="${escapeHtml(data.groupId||'')}"`}>${person}</div>`:'';
     const choice=notificationReply?.id===row.id?replySlot(notificationReply.rows,notificationReply.text):null;
     const note=choice?.update?t('入力文をVRChatの返信文枠へ保存して送信します。変更後は約1時間再変更できません。'):t('返信は最大64文字です。変更可能な返信文枠が必要です。');

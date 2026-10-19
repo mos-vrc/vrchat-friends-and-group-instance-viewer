@@ -48,12 +48,7 @@ export function safeImageUrl(rawUrl) {
     const url = new URL(rawUrl, 'https://vrchat.com/');
     if (url.protocol !== 'https:') return '';
     const host = url.hostname.toLowerCase();
-    if (host === 's3-us-west-2.amazonaws.com') {
-      // Legacy VRChat thumbnails live in this bucket, not arbitrary S3 buckets.
-      if (url.origin !== 'https://s3-us-west-2.amazonaws.com' || url.username || url.password
-        || !url.pathname.startsWith('/vrc-uploads/images/')
-        || url.pathname === '/vrc-uploads/images/') return '';
-    } else if (!ALLOWED_IMAGE_HOSTS.has(host)) return '';
+    if (!ALLOWED_IMAGE_HOSTS.has(host)) return '';
     return url.href;
   } catch {
     return '';

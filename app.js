@@ -6,7 +6,7 @@ import { IconFrameCatalog, FrameAnimations, framedAvatar } from "./icon-frames.j
 import { NotificationLocal, canPinNotification, MEMO_MAX_LENGTH } from "./notification-local.js";
 import { elapsedUpdateLabel } from "./update-time.js";
 import { renderNotificationList } from "./notification-view.js";
-import { diagnosticLog } from "./diagnostics.js";
+import { summarizeGroupInstances, diagnosticLog } from "./diagnostics.js";
 import { refreshIsBlocked } from "./refresh-policy.js";
 import { NotificationStore, replySlot, REPLY_MAX_LENGTH, bulkNotificationAction, userId as notificationUserId } from "./notifications.js";
 import { ToolbarLayout } from "./toolbar-layout.js";
@@ -22,6 +22,7 @@ import { patchElement, patchMarkup } from "./dom.js";
 import { ImagePool, ImageController } from "./images.js";
 import { formatActivityDateTime } from "./ui-format.js";
 import { CONFIG, PERMISSIONS, SORTS, TABS } from "./config.js";
+import { captureStableView, restoreStableView } from "./view-position.js";
 import { JsonStorage } from "./storage.js";
 import { DataRepository, VrchatApiClient } from "./api.js";
 import { InstanceHydrationController } from "./hydration.js";
@@ -128,6 +129,9 @@ const state = {
   instances: [],
   initialWorldPreviews: new Set(),
   groupDetailAttempts: new Set(),
+  instanceRetries: new Set(),
+  instanceRetryAttempts: new Map(),
+  instanceRetryViews: new Map(),
   loading: false,
   loadFailed: false,
   groupLoadFailed: false,
@@ -240,6 +244,7 @@ const {
   instanceIsHighlighted,
   limitedMarkup,
   needsHydration,
+  getInstanceRetryState: entry => ({pending:state.instanceRetries.has(entry.location),attempts:state.instanceRetryAttempts.get(entry.location)||0}),
   renderFavoriteActionButton,
   renderFramedAvatar,
   renderWorldFavoriteButton,
@@ -253,7 +258,7 @@ const {
 window.addEventListener('resize', positionSettingsPanel);
 
 function automaticRefreshBlocked() {
-  return Boolean(document.activeElement?.matches?.('[data-notification-memo]')) || refreshIsBlocked({loading:state.loading || worldView.loading || state.recent.loading, favoriteMutationPending:state.favoriteMutationPending, pendingInvites:state.pendingInvites.size, notificationBusy, friendEditor:state.favoriteGroupEditor, worldEditor:worldView.editor, notificationReply});
+  return Boolean(document.activeElement?.matches?.('[data-notification-memo]')) || refreshIsBlocked({loading:state.loading || state.instanceRetries.size>0 || worldView.loading || state.recent.loading, favoriteMutationPending:state.favoriteMutationPending, pendingInvites:state.pendingInvites.size, notificationBusy, friendEditor:state.favoriteGroupEditor, worldEditor:worldView.editor, notificationReply});
 }
 function resumeAutoRefresh() { if(state.autoRefreshDueAt)scheduleAutoRefresh({preserveDue:true}); }
 function clearAutoRefreshTimer() {
@@ -503,7 +508,7 @@ const actionToast = new ActionToast(elements.actionToast);
 function hideActionToast() { actionToast.dismiss(); state.favoriteUndo = null; }
 function diagnosticText() {
   const manifest=globalThis.chrome?.runtime?.getManifest?.() || {};
-  return JSON.stringify(diagnosticLog.snapshot({version:manifest.version_name || manifest.version || '1.6.6.3',language:getLocale(),theme:state.theme,view:state.viewMode,counts:{friends:state.friends.length,instances:state.instances.length,notifications:notifications?.rows.length || 0}}),null,2);
+  return JSON.stringify(diagnosticLog.snapshot({version:manifest.version_name || manifest.version || '1.6.6.3',language:getLocale(),theme:state.theme,view:state.viewMode,counts:{friends:state.friends.length,instances:state.instances.length,notifications:notifications?.rows.length || 0},groups:summarizeGroupInstances(state.instances,{pending:state.instanceRetries,attempts:state.groupDetailAttempts,limit:CONFIG.MAX_GROUP_INSTANCE_DETAILS,listFailed:state.groupLoadFailed})}),null,2);
 }
 async function copyDiagnostics() {
   try { await navigator.clipboard.writeText(diagnosticText()); showActionToast(t('診断情報をコピーしました。')); }
@@ -1227,18 +1232,19 @@ function instanceIsVisible(location) {
   });
 }
 
-function canRequestGroupDetails(entry) {
-  return !state.groupDetailAttempts.has(entry.location)
-    && state.groupDetailAttempts.size < CONFIG.MAX_GROUP_INSTANCE_DETAILS
-    && instanceIsVisible(entry.location);
+function canRequestGroupDetails(entry, manual = false) {
+  return (manual ? (state.groupDetailAttempts.has(entry.location) || state.groupDetailAttempts.size < CONFIG.MAX_GROUP_INSTANCE_DETAILS) : (!state.groupDetailAttempts.has(entry.location) && state.groupDetailAttempts.size < CONFIG.MAX_GROUP_INSTANCE_DETAILS))
+    && (manual || instanceIsVisible(entry.location));
 }
 
 function needsHydration(entry) {
   if (repository.disposed || state.loading || !entry || entry.debug || entry.permission === PERMISSIONS.PRIVATE) return false;
-  if (instanceNeedsDetails(entry)) {
-    if (entry.instanceFetchFailed) return false;
-    return !entry.groupId || canRequestGroupDetails(entry);
+  const manual=state.instanceRetries.has(entry.location);
+  if (instanceNeedsDetails(entry) || (manual && entry.instanceFetchFailed)) {
+    if (entry.instanceFetchFailed && !manual) return false;
+    return !entry.groupId || canRequestGroupDetails(entry,manual);
   }
+  if (manual && entry.worldFetchFailed) return true;
   if ((!entry.world || entry.world.cacheStale) && !entry.worldFetchFailed
     && entry.worldId && entry.worldId !== 'offline' && entry.worldId !== 'private') return true;
   return needsNonFriendOwnerProfile(entry, friendMap(), ownerDisplayState());
@@ -1302,6 +1308,24 @@ function replaceCardInDom(entry) {
   }
 }
 
+function requestInstanceRetry(event) {
+  const button=event.target.closest('[data-instance-retry]');if(!button)return;
+  event.preventDefault();event.stopPropagation();
+  if(CONFIG.SCREENSHOT_MODE || state.loading || state.favoriteMutationPending || repository.disposed)return;
+  const entry=getCurrentInstanceEntry(button.dataset.instanceRetry);
+  if(!entry || (!entry.instanceFetchFailed&&!entry.worldFetchFailed) || state.instanceRetries.has(entry.location)
+    || hydrationController.activeLocations.has(entry.location)
+    || (state.instanceRetryAttempts.get(entry.location)||0)>=CONFIG.MAX_INSTANCE_MANUAL_RETRIES)return;
+  if(entry.instanceFetchFailed && entry.groupId && !canRequestGroupDetails(entry,true))return;
+  const snapshot=captureStableView([elements.list],{attribute:'data-instance-retry',value:entry.location,anchor:button});
+  snapshot.key=favoriteViewKey();
+  state.instanceRetryViews.set(entry.location,snapshot);
+  state.instanceRetryAttempts.set(entry.location,(state.instanceRetryAttempts.get(entry.location)||0)+1);
+  state.instanceRetries.add(entry.location);
+  replaceCardInDom(entry);
+  hydrationController.enqueue(entry);
+}
+
 async function hydrateInstance(location, fallbackEntry) {
   if (!location || repository.disposed) return;
   const dataRepository = repository;
@@ -1309,9 +1333,13 @@ async function hydrateInstance(location, fallbackEntry) {
   const current = () => generation === state.loadGeneration && !dataRepository.disposed;
   let currentEntry = getCurrentInstanceEntry(location, fallbackEntry);
   if (!currentEntry || currentEntry.permission === PERMISSIONS.PRIVATE) return;
-  const needsDetails = instanceNeedsDetails(currentEntry);
-  if (needsDetails && currentEntry.instanceFetchFailed) return;
-  if (needsDetails && currentEntry.groupId && !canRequestGroupDetails(currentEntry)) return;
+  const manual=state.instanceRetries.has(location);
+  const retryView=state.instanceRetryViews.get(location);
+  const forceInstance=manual&&Boolean(currentEntry.instanceFetchFailed);
+  const forceWorld=manual&&Boolean(currentEntry.worldFetchFailed);
+  const needsDetails = forceInstance || instanceNeedsDetails(currentEntry);
+  if (needsDetails && currentEntry.instanceFetchFailed && !manual) return;
+  if (needsDetails && currentEntry.groupId && !canRequestGroupDetails(currentEntry,manual)) return;
 
   try {
     // Spend a bounded cold-start budget on visible world previews. Distant
@@ -1338,6 +1366,7 @@ async function hydrateInstance(location, fallbackEntry) {
           // Inline world metadata from the Instance can still restore its display.
           currentEntry=getCurrentInstanceEntry(location,currentEntry);
           currentEntry.worldFetchFailed=true;
+          diagnosticLog.record('instance-world',error,{path:'/worlds/{id}',method:'GET'});
         }
       }
     }
@@ -1345,11 +1374,11 @@ async function hydrateInstance(location, fallbackEntry) {
     if (needsDetails) {
       // The user may have scrolled while a world preview was loading.
       if (currentEntry.groupId) {
-        if (!canRequestGroupDetails(currentEntry)) return;
+        if (!canRequestGroupDetails(currentEntry,manual)) return;
         state.groupDetailAttempts.add(location);
       }
       try {
-        data = await dataRepository.fetchInstance(location);
+        data = await dataRepository.fetchInstance(location,{force:forceInstance});
         if (!current()) return;
         if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid instance details');
       } catch (error) {
@@ -1357,6 +1386,7 @@ async function hydrateInstance(location, fallbackEntry) {
         if (error?.status === 401) { handleSessionExpired(); return; }
         currentEntry = getCurrentInstanceEntry(location, currentEntry);
         currentEntry.instanceFetchFailed = true;
+        diagnosticLog.record('instance-details',error,{path:'/instances/{world}/{instance}',method:'GET'});
         replaceCardInDom(currentEntry);
         throw error;
       }
@@ -1367,12 +1397,12 @@ async function hydrateInstance(location, fallbackEntry) {
     const changed = !currentEntry.instanceData || currentEntry.instanceData !== data;
     currentEntry.instanceFetchFailed = false;
     mergeInstanceData(currentEntry, data);
-    if(currentEntry.world && !currentEntry.world.cacheStale)currentEntry.worldFetchFailed=false;
+    if(currentEntry.world && !currentEntry.world.cacheStale && !forceWorld)currentEntry.worldFetchFailed=false;
 
-    if ((!currentEntry.world || currentEntry.world.cacheStale) && !currentEntry.worldFetchFailed
+    if (((!currentEntry.world || currentEntry.world.cacheStale) && !currentEntry.worldFetchFailed || forceWorld)
       && currentEntry.worldId && currentEntry.worldId !== 'offline' && currentEntry.worldId !== 'private') {
       try {
-        const world = await dataRepository.fetchWorld(currentEntry.worldId);
+        const world = await dataRepository.fetchWorld(currentEntry.worldId,{force:forceWorld});
         if (!current()) return;
         currentEntry = getCurrentInstanceEntry(location, currentEntry);
         if (world) {
@@ -1386,6 +1416,7 @@ async function hydrateInstance(location, fallbackEntry) {
         if (error?.status === 401) { handleSessionExpired(); return; }
         currentEntry = getCurrentInstanceEntry(location, currentEntry);
         currentEntry.worldFetchFailed = true;
+        diagnosticLog.record('instance-world',error,{path:'/worlds/{id}',method:'GET'});
       }
     }
 
@@ -1408,7 +1439,16 @@ async function hydrateInstance(location, fallbackEntry) {
     if (error?.status === 401) { handleSessionExpired(); return; }
     console.warn('Could not hydrate instance:', location, error);
   } finally {
-    if (current()) startPendingGroupRefresh();
+    if (current()) {
+      if(manual){
+        state.instanceRetries.delete(location);
+        state.instanceRetryViews.delete(location);
+        replaceCardInDom(getCurrentInstanceEntry(location,currentEntry));
+        if(retryView?.key===favoriteViewKey())restoreStableView(retryView);
+      }
+      startPendingGroupRefresh();
+    }
+    if(manual)retryView?.dispose();
   }
 }
 
@@ -1810,6 +1850,11 @@ function positionFavoriteMenu(anchor) {
   if (!menu || !anchor?.isConnected || menu.classList.contains('hidden')) return;
   const edge = 8;
   const gap = 5;
+  const scale = menu.getBoundingClientRect().width / menu.offsetWidth || 1;
+  const availableWidth = Math.max(1, (window.innerWidth - edge * 2) / scale);
+  menu.style.minWidth = `${Math.min(188, availableWidth)}px`;
+  menu.style.maxWidth = `${Math.min(280, availableWidth)}px`;
+  menu.style.maxHeight = `${Math.max(1, (window.innerHeight - edge * 2) / scale)}px`;
   const rect = anchor.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
   let left = rect.right + gap;
@@ -1817,8 +1862,8 @@ function positionFavoriteMenu(anchor) {
   if (left + menuRect.width > window.innerWidth - edge) left = rect.left - menuRect.width - gap;
   left = Math.min(left, window.innerWidth - menuRect.width - edge);
   if (top + menuRect.height > window.innerHeight - edge) top = rect.top - menuRect.height - gap;
-  menu.style.left = `${Math.max(edge, Math.round(left))}px`;
-  menu.style.top = `${Math.max(edge, Math.round(top))}px`;
+  menu.style.left = `${Math.max(edge, Math.round(left)) / scale}px`;
+  menu.style.top = `${Math.max(edge, Math.round(top)) / scale}px`;
 }
 
 function renderFavoriteMenu(userId, anchor) {
@@ -1855,6 +1900,15 @@ function onFavoriteMenuMouseLeave() {
   hideFriendInstancePreview();
 }
 
+let favoritePositionSerial=0;
+function favoriteViewKey(){return [state.viewMode,state.tab,state.sidebarMode,worldView.selected,state.loadGeneration].join('|');}
+function captureFavoritePosition(userId='',worldId=''){
+  const origin=state.favoriteMenu.fromFriendPreview?state.friendPreview.anchor:state.favoriteMenu.anchor;
+  const view=captureStableView([elements.friendList,elements.list],{attribute:worldId?'data-world-favorite-id':'data-favorite-user-id',value:worldId||userId,anchor:origin});
+  view.key=favoriteViewKey();view.serial=++favoritePositionSerial;return view;
+}
+function restoreFavoritePosition(view){if(view?.key===favoriteViewKey()&&view.serial===favoritePositionSerial)restoreStableView(view);}
+
 async function applyFavoriteMutation({ userId, groupName = '', remove = false } = {}) {
   if (!userId || state.favoriteMutationPending || state.loading) return;
   if (CONFIG.DEBUG_MODE) {
@@ -1870,6 +1924,7 @@ async function applyFavoriteMutation({ userId, groupName = '', remove = false } 
     return;
   }
 
+  const position=captureFavoritePosition(userId);
   actionToast.clearUndo(); state.favoriteUndo = null;
   state.favoriteMutationPending = true;
   state.favoriteMenu.busy = true;
@@ -1910,7 +1965,11 @@ async function applyFavoriteMutation({ userId, groupName = '', remove = false } 
       : lt`Favoriteの更新に失敗しました${error?.status ? ` (${error.status})` : ''}${rollback}`;
     showActionToast(message, { error: true, delay: 5600 });
   } finally {
-    if (generation === state.loadGeneration) state.favoriteMutationPending = false;
+    if (generation === state.loadGeneration) {
+      state.favoriteMutationPending = false;
+      if(elements.favoriteMenu.classList.contains('hidden')){render({resetScroll:false});restoreFavoritePosition(position);}
+    }
+    position.dispose();
   }
 }
 
@@ -1929,6 +1988,7 @@ async function undoFavorite(ticket) {
   }
   const dataRepository = repository;
   const generation = state.loadGeneration;
+  const position=captureFavoritePosition(ticket.userId);
   state.favoriteMutationPending = true;
   actionToast.setUndoBusy(true);
   closeFavoriteMenu();
@@ -1960,7 +2020,9 @@ async function undoFavorite(ticket) {
       state.favoriteMutationPending = false;
       state.favoriteUndo = null;
       actionToast.clearUndo();
+      render({resetScroll:false});restoreFavoritePosition(position);
     }
+    position.dispose();
   }
 }
 
@@ -2025,6 +2087,7 @@ async function changeWorldFavorite(worldId, desired, expected, undo=false) {
   if(state.loading || state.favoriteMutationPending || !worldFavorites)return;
   const store=worldFavorites,generation=state.loadGeneration,account=state.user?.id;
   let deferWorldReload=false;
+  const position=captureFavoritePosition('',worldId);
   actionToast.clearUndo();state.favoriteUndo=null;state.favoriteMutationPending=true;state.favoriteMenu.busy=true;
   elements.favoriteMenu?.querySelectorAll('button').forEach(b=>{b.disabled=true});
   showActionToast(t('Favoriteを更新中…'),{delay:0});
@@ -2064,7 +2127,14 @@ async function changeWorldFavorite(worldId, desired, expected, undo=false) {
       : error?.favoriteListSetupSuggested ? t('空リストの登録に失敗しました。改善しない場合は、公式ページから各リストへ最低ひとつ以上のワールドをお気に入り登録した後、この拡張機能の更新ボタンで再取得してください。')
       : t('ワールドFavoriteを変更できませんでした。登録上限やアクセス権を確認してください。');
     showActionToast(message,{error:true,delay:error?.favoriteListSetupSuggested?15000:6000});
-  }finally{if(generation===state.loadGeneration){state.favoriteMutationPending=false;state.favoriteMenu.busy=false;render({resetScroll:false});if(!deferWorldReload&&state.viewMode===VIEW_MODES.RECENT&&worldView.selected!=='recent')void loadWorldView()}}
+  }finally{
+    if(generation===state.loadGeneration){
+      state.favoriteMutationPending=false;state.favoriteMenu.busy=false;render({resetScroll:false});restoreFavoritePosition(position);
+      if(!deferWorldReload&&state.viewMode===VIEW_MODES.RECENT&&worldView.selected!=='recent'){
+        void loadWorldView().finally(()=>{if(generation===state.loadGeneration)restoreFavoritePosition(position);position.dispose();});
+      }else position.dispose();
+    }else position.dispose();
+  }
 }
 function onWorldFavoriteClick(event) {
   const button=event.target.closest('.world-favorite-button');
@@ -2162,14 +2232,14 @@ const hydrationController = new InstanceHydrationController({
   root: elements.list,
   getEntries: () => state.instances,
   getSupplementalLocations: () => {
-    if (state.sidebarMode !== 'location' || !elements.friendList) return [];
+    if (state.sidebarMode !== 'location' || !elements.friendList) return [...state.instanceRetries];
     const bounds = elements.friendList.getBoundingClientRect();
     const preload = Math.min(CONFIG.HYDRATE_PRELOAD_PX, 320);
-    return [...elements.friendList.querySelectorAll('.friend-item[data-location]')]
+    return [...state.instanceRetries,...[...elements.friendList.querySelectorAll('.friend-item[data-location]')]
       .filter(card => {
         const rect = card.getBoundingClientRect();
         return rect.height > 0 && rect.bottom >= bounds.top - preload && rect.top <= bounds.bottom + preload;
-      }).map(card => card.dataset.location).filter(Boolean);
+      }).map(card => card.dataset.location).filter(Boolean)];
   },
   needsHydration,
   hydrate: hydrateInstance,
@@ -2322,7 +2392,7 @@ async function refreshGroupDataInBackground(userId, dataRepository, generation) 
     const groupInstances = await dataRepository.fetchGroupInstances(userId);
     if (!current()) return;
     state.groupLoadFailed = Boolean(dataRepository.groupInstancesError);
-    if (state.groupLoadFailed) setStatus(readFailureMessage('groups', dataRepository.groupInstancesError), true);
+    if (state.groupLoadFailed) {diagnosticLog.record('groups',dataRepository.groupInstancesError);setStatus(readFailureMessage('groups', dataRepository.groupInstancesError), true);}
     const previous = new Map(state.instances.map(entry => [entry.location, entry]));
     state.instances = buildLocations(
       createFriendLocationMap(state.friends),
@@ -2491,7 +2561,13 @@ function loadDebugData() {
   setStatus(lt`DEBUG MODE: 各${Math.max(1, Math.floor(Number(CONFIG.DEBUG_FRIEND_COUNT) || 20))}人・Favorite ${CONFIG.DEBUG_FAVORITE_COUNT}人 / 3インスタンス（Public・Group・Private）`);
 }
 
+function clearInstanceRetries(){
+  for(const view of state.instanceRetryViews.values())view.dispose();
+  state.instanceRetryViews.clear();state.instanceRetries.clear();state.instanceRetryAttempts.clear();
+}
+
 function clearDisplayedData() {
+  clearInstanceRetries();state.groupDetailAttempts.clear();
   diagnosticLog.clear();
   notificationProfileReads.clear();notificationProfileFailures.clear();
   if(notificationBulk)notificationBulk.stop=true;notificationBulk=null;
@@ -2567,6 +2643,7 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
   const generation = ++state.loadGeneration;
   state.initialWorldPreviews.clear();
   state.groupDetailAttempts.clear();
+  clearInstanceRetries();
   const current = () => generation === state.loadGeneration && !dataRepository.disposed;
   hydrationController.reset();
   state.recent.token += 1; state.recent.loading = false; worldView.token++; worldView.loading=false;
@@ -2925,6 +3002,7 @@ elements.list?.addEventListener('keydown', event => {
   }
   if (event.key === 'Enter' && event.isComposing) event.preventDefault();
 });
+elements.list?.addEventListener('click', requestInstanceRetry, true);
 elements.list?.addEventListener('click', onInviteMeClick);
 elements.list?.addEventListener('mouseover', onFriendLocationMouseOver);
 elements.list?.addEventListener('mousemove', onFriendLocationMouseMove, { passive: true });

@@ -851,7 +851,8 @@ export class DataRepository {
     if (userId !== this.currentUserId) throw new Error('Group instance request account mismatch.');
     try {
       const raw = await this.api.fetchGroupInstances(userId);
-      const items = Array.isArray(raw) ? raw : Array.isArray(raw?.instances) ? raw.instances : [];
+      if (!Array.isArray(raw) && !Array.isArray(raw?.instances)) throw new ApiError(200, 'Invalid group instances');
+      const items = Array.isArray(raw) ? raw : raw.instances;
       for (const item of items) if (item?.world) this.cacheWorld(item.world);
       this.groupInstancesCache.set({ userId, items });
       return items;
@@ -899,29 +900,29 @@ export class DataRepository {
     }
   }
 
-  fetchInstance(location) {
+  fetchInstance(location, {force = false} = {}) {
     this.requireCurrentUser();
-    return this.singleFlight('fetchInstance:' + location, () => this.fetchInstanceUncached(location));
+    return this.singleFlight('fetchInstance:' + location, () => this.fetchInstanceUncached(location, {force}));
   }
 
-  async fetchInstanceUncached(location) {
+  async fetchInstanceUncached(location, {force = false} = {}) {
     const cached = this.instanceCache.get(location, CONFIG.INSTANCE_CACHE_TTL_MS);
-    if (cached !== null) return cached;
+    if (!force && cached !== null) return cached;
     const data = await this.api.fetchInstance(location);
     if (data?.world?.id === location.split(':')[0]) this.cacheWorld(data.world);
     this.instanceCache.set(location, data);
     return data;
   }
 
-  fetchWorld(worldId) {
+  fetchWorld(worldId, {force = false} = {}) {
     this.requireCurrentUser();
-    return this.singleFlight('fetchWorld:' + worldId, () => this.fetchWorldUncached(worldId));
+    return this.singleFlight('fetchWorld:' + worldId, () => this.fetchWorldUncached(worldId, {force}));
   }
 
-  async fetchWorldUncached(worldId) {
+  async fetchWorldUncached(worldId, {force = false} = {}) {
     if (!worldId || worldId === 'offline' || worldId === 'private') return null;
     const cached = this.worldCache.get(worldId, CONFIG.WORLD_CACHE_TTL_MS, { preserveExpired: true });
-    if (cached !== null) return cached;
+    if (!force && cached !== null) return cached;
     const data = await this.api.fetchWorld(worldId);
     const normalized = slimWorld(data);
     if (this.disposed) throw new DOMException('Repository disposed', 'AbortError');

@@ -57,7 +57,8 @@
 .notification-pin svg {width:16px;height:16px;display:block;}
 .notification-pin.is-pinned {color:var(--accent);border-color:var(--accent);}
 .notification-card.is-pinned {border-color:var(--accent);}
-.notification-pin:focus-visible,.notification-memo textarea:focus-visible {outline:2px solid var(--focus-ring);outline-offset:2px;}
+.notification-pin:focus-visible {outline:2px solid var(--focus-ring);outline-offset:2px;}
+.notification-memo textarea:focus-visible {outline:1px solid color-mix(in srgb,var(--focus-ring) 40%,var(--line));outline-offset:1px;}
 .notification-pin:disabled {opacity:.5;cursor:default;}
 .notification-footer {position:static;flex:0 0 auto;background:var(--panel);}
 .notification-footer .notification-bulk {position:static;}

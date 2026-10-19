@@ -1,5 +1,12 @@
 // Only static UI source text is translated. API/user content is never scanned.
 const english = Object.freeze({
+  "一部取得失敗": "Partially unavailable",
+  "インスタンス情報を取得できませんでした。": "Could not load instance details.",
+  "ワールド情報を取得できませんでした。": "Could not load world details.",
+  "このインスタンスの情報を再取得": "Retry this instance",
+  "次の更新で再試行できます。": "Try again after refreshing.",
+  "再取得": "Retry",
+  "取得中…": "Loading…",
   "保存した通知": "Saved notification",
   "画像を保存できませんでした。本文は保存されています。": "Image could not be saved. The text is saved.",
   "最終アクティブ日時不明": "Last active unknown",
