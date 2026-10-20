@@ -3,11 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>VRChat Friends &amp; Group Instance Viewer v1.6.7.9</title>
+  <title>VRChat Friends &amp; Group Instance Viewer v1.6.8</title>
   <link rel="stylesheet" href="index.css">
   <link rel="stylesheet" href="favorite-menu.css">
   <link rel="stylesheet" href="notification.css">
   <link rel="stylesheet" href="feedback.css">
+  <link rel="stylesheet" href="floating-memo.css">
 </head>
 <body data-theme="ash" data-instance-display="normal">
   <div class="app-shell">
@@ -34,6 +35,8 @@
       </div>
       <div id="friendList" class="friend-list"></div>
       <div class="friend-sidebar-footer">
+        <button id="sidebarFooterToggle" class="sidebar-footer-toggle" type="button" aria-controls="sidebarVisibilityControls" aria-expanded="false" title="OtherPlatform・Offlineの設定を開く" aria-label="OtherPlatform・Offlineの設定を開く"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg></button>
+        <div id="sidebarVisibilityControls" class="sidebar-visibility-controls" hidden>
         <label class="website-toggle" for="showOnWebsite" title="OtherPlatformを表示">
           <input id="showOnWebsite" type="checkbox" aria-label="OtherPlatformを表示" title="OtherPlatformを表示">
           <span class="website-toggle-box" aria-hidden="true"></span>
@@ -44,6 +47,8 @@
           <span class="website-toggle-box" aria-hidden="true"></span>
           <span class="website-toggle-text">Offline</span>
         </label>
+        </div>
+
       </div>
     </aside>
 
@@ -150,6 +155,7 @@
               <label class="settings-label" for="showNonFriendOwners">フレンド外のインスタンスオーナーを表示</label>
               <input id="showNonFriendOwners" class="settings-switch" type="checkbox" role="switch">
             </div>
+              <div class="settings-row"><label class="settings-label" for="showFloatingMemo">右下にメモ帳機能を表示</label><input id="showFloatingMemo" class="settings-switch" type="checkbox" role="switch" checked></div>
             <div class="settings-row"><label class="settings-label" for="showIconFrames">アイコンフレームを反映</label><input id="showIconFrames" class="settings-switch" type="checkbox" role="switch"></div>
               <div class="settings-row cache-settings-row">
               <span class="settings-label">保存データ</span>
@@ -172,6 +178,14 @@
       </section>
 
       <section id="list" tabindex="-1" class="instance-list" aria-label="表示内容"></section>
+
+      <div id="floatingMemo" class="floating-memo" hidden>
+        <section id="floatingMemoPanel" class="floating-memo-panel" data-floating-memo-panel role="region" aria-label="メモ帳">
+          <div class="floating-memo-input"><button class="floating-memo-close" data-floating-memo-close type="button" title="メモを閉じる" aria-label="メモを閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><textarea id="floatingMemoInput" aria-label="メモ" placeholder="メモ帳" spellcheck="false" maxlength="200"></textarea><span class="floating-memo-length" data-floating-memo-length>0 / 200</span></div>
+          <div class="floating-memo-status" data-floating-memo-status role="status"></div>
+        </section>
+        <button class="floating-memo-toggle" data-floating-memo-toggle type="button" aria-controls="floatingMemoPanel" aria-expanded="false" title="メモを開く" aria-label="メモを開く" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 3h13a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H5V3ZM3 7h4M3 12h4M3 17h4M10 8h5M10 12h5M10 16h3"/></svg><span class="floating-memo-dot" data-floating-memo-dot hidden aria-hidden="true"></span></button>
+      </div>
 
       <button id="backToTop" class="back-to-top" type="button" aria-label="上部へ戻る" title="上部へ戻る" hidden><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 13 6-6 6 6M12 7v12"/></svg></button>
     </main>

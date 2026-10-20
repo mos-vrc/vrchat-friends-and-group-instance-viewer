@@ -58,7 +58,7 @@ body[data-theme] .favorite-action-button.favorite-badge.is-favorite-menu-open {
   box-shadow: 0 0 0 2px rgba(85, 216, 237, .70), 0 2px 8px rgba(0,0,0,.38);
 }
 body[data-theme] .world-favorite-button.favorite-badge.is-favorite-menu-open {
-  outline: 2px solid var(--accent);
+  outline:var(--control-focus-outline, 2px solid var(--accent));
   outline-offset: 2px;
 }
 :is(.favorite-action-button,.world-favorite-button).favorite-badge.is-favorite-menu-open:not(.is-favorite)::after {

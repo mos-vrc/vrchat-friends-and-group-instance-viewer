@@ -1,3 +1,4 @@
+import { FloatingMemo } from './floating-memo.js';
 import { createViews } from "./views.js";
 import { createSettings } from "./settings.js";
 import { NotificationImageSaver } from "./notification-image-saver.js";
@@ -43,11 +44,14 @@ const elements = {
   friendFilter: document.getElementById('friendFilter'),
   showOnWebsite: document.getElementById('showOnWebsite'),
   showOffline: document.getElementById('showOffline'),
+  sidebarFooterToggle: document.getElementById('sidebarFooterToggle'),
+  sidebarVisibilityControls: document.getElementById('sidebarVisibilityControls'),
   offlineSearchStatus: document.getElementById('offlineSearchStatus'),
   sort: document.getElementById('sort'),
   offlineSort: document.getElementById('offlineSort'),
   showIconFrames: document.getElementById('showIconFrames'),
   showNonFriendOwners: document.getElementById('showNonFriendOwners'),
+  showFloatingMemo: document.getElementById('showFloatingMemo'),
   settingsButton: document.getElementById('settingsButton'),
   settingsPanel: document.getElementById('settingsPanel'),
   settingsMore: document.getElementById('settingsMore'),
@@ -109,11 +113,13 @@ const state = {
   offlineSort: 'name',
   showIconFrames: false,
   showNonFriendOwners: false,
+  showFloatingMemo: true,
   displayLimits: new Map(),
   theme: 'ash',
   autoRefreshMinutes: 0,
   autoRefreshTimer: null,
   sidebarMode: 'normal',
+  sidebarFooterExpanded: false,
   user: null,
   favorites: new Set(),
   favoriteRecords: new Map(),
@@ -210,6 +216,8 @@ const {
   uiStorage,
 });
 
+const floatingMemo=new FloatingMemo({storage:uiStorage,root:document.getElementById('floatingMemo'),main:document.getElementById('mainPane'),list:elements.list,backToTop:elements.backToTop,getEnabled:()=>state.showFloatingMemo,getAccount:()=>state.user?.id||'',onEditingEnd:()=>resumeAutoRefresh()});
+
 const {
   renderFriendSidebarLocationThumbnail,
   renderFriendSidebarItem,
@@ -258,7 +266,7 @@ const {
 window.addEventListener('resize', positionSettingsPanel);
 
 function automaticRefreshBlocked() {
-  return Boolean(document.activeElement?.matches?.('[data-notification-memo]')) || refreshIsBlocked({loading:state.loading || state.instanceRetries.size>0 || worldView.loading || state.recent.loading, favoriteMutationPending:state.favoriteMutationPending, pendingInvites:state.pendingInvites.size, notificationBusy, friendEditor:state.favoriteGroupEditor, worldEditor:worldView.editor, notificationReply});
+  return floatingMemo.isEditing() || Boolean(document.activeElement?.matches?.('[data-notification-memo]')) || refreshIsBlocked({loading:state.loading || state.instanceRetries.size>0 || worldView.loading || state.recent.loading, favoriteMutationPending:state.favoriteMutationPending, pendingInvites:state.pendingInvites.size, notificationBusy, friendEditor:state.favoriteGroupEditor, worldEditor:worldView.editor, notificationReply});
 }
 function resumeAutoRefresh() { if(state.autoRefreshDueAt)scheduleAutoRefresh({preserveDue:true}); }
 function clearAutoRefreshTimer() {
@@ -2249,6 +2257,7 @@ const hydrationController = new InstanceHydrationController({
 });
 
 function render({ resetScroll = false, hydrationMode = 'normal', priorityLocation = '' } = {}) {
+  floatingMemo.sync();
   void ensureIconFrames();
   updateReloadButton();
   resumeAutoRefresh();
@@ -2567,6 +2576,7 @@ function clearInstanceRetries(){
 }
 
 function clearDisplayedData() {
+  floatingMemo.select('');
   clearInstanceRetries();state.groupDetailAttempts.clear();
   diagnosticLog.clear();
   notificationProfileReads.clear();notificationProfileFailures.clear();
@@ -2671,6 +2681,7 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     const previousWorlds = worldFavorites;
     state.recent.token += 1; state.recent.loading = false; worldView.token++; worldView.loading=false;
     state.user = user;
+    floatingMemo.sync();
     if(notifications?.account!==user.id){notifications?.dispose();notifications=new NotificationStore(dataRepository.api,user.id);}else {await notifications.inflight;if(!current())return;notifications.disposed=false;notifications.api=dataRepository.api;}
     if(notificationLocal.account!==user.id){notificationImageSaves.clear();notificationLocal.select(user.id);}
     if(iconFrames.account!==user.id)iconFrames.reset(user.id);
@@ -2916,6 +2927,7 @@ elements.showNonFriendOwners?.addEventListener('change', () => {
   persistUiPreferences(); render({resetScroll:false});
   if (state.friendPreview.location) renderFriendInstancePreview(getCurrentInstanceEntry(state.friendPreview.location));
 });
+elements.showFloatingMemo?.addEventListener('change',()=>{state.showFloatingMemo=elements.showFloatingMemo.checked;persistUiPreferences();floatingMemo.sync();resumeAutoRefresh();});
 elements.offlineSort?.addEventListener('change', () => {
   state.offlineSort = elements.offlineSort.value;
   resetDisplayLimits(); persistUiPreferences(); render();

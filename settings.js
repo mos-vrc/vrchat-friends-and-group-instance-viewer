@@ -35,10 +35,12 @@ export function createSettings({
       offlineSort: state.offlineSort,
       showIconFrames: state.showIconFrames,
       showNonFriendOwners: state.showNonFriendOwners,
+      showFloatingMemo: state.showFloatingMemo,
       theme: state.theme,
       autoRefreshMinutes: state.autoRefreshMinutes,
       sidebarWidths: sidebarResizer.preferences(),
       sidebarMode: state.sidebarMode,
+      sidebarFooterExpanded: state.sidebarFooterExpanded,
       sidebarCollapsed: state.sidebarMode === 'hidden',
       friendFilter: elements.friendFilter?.value || 'all',
       showOnWebsite: elements.showOnWebsite?.checked !== false,
@@ -82,9 +84,12 @@ export function createSettings({
       : prefs.sidebarCollapsed === true
         ? 'hidden'
         : 'normal';
+    state.sidebarFooterExpanded = prefs.sidebarFooterExpanded === true;
     state.offlineSort = ['name', 'recent', 'oldest'].includes(prefs.offlineSort) ? prefs.offlineSort : 'name';
     if (elements.offlineSort) elements.offlineSort.value = state.offlineSort;
     state.showIconFrames=prefs.showIconFrames===true;elements.showIconFrames.checked=state.showIconFrames;
+    state.showFloatingMemo = prefs.showFloatingMemo !== false;
+    if(elements.showFloatingMemo)elements.showFloatingMemo.checked=state.showFloatingMemo;
     state.showNonFriendOwners = prefs.showNonFriendOwners === true;
     if (elements.showNonFriendOwners) elements.showNonFriendOwners.checked = state.showNonFriendOwners;
     applyInstanceSize();
@@ -168,7 +173,34 @@ export function createSettings({
     updateThemeButtons();
   }
 
+  function applySidebarFooter() {
+    const button=elements.sidebarFooterToggle,controls=elements.sidebarVisibilityControls;
+    if(!button||!controls)return;
+    const open=state.sidebarFooterExpanded;
+    const footer=button.closest('.friend-sidebar-footer');
+    footer.classList.toggle('is-expanded',open);footer.hidden=state.sidebarMode==='hidden';
+    controls.hidden=!open;button.setAttribute('aria-expanded',String(open));
+    button.title=button.ariaLabel=t(open?'OtherPlatform・Offlineの設定を閉じる':'OtherPlatform・Offlineの設定を開く');
+    button.querySelector('path').setAttribute('d',open?'m5 8 5 5 5-5':'m5 12 5-5 5 5');
+  }
+  elements.sidebarFooterToggle?.addEventListener('click',()=>{
+    state.sidebarFooterExpanded=!state.sidebarFooterExpanded;applySidebarFooter();persistUiPreferences();
+  });
+
+  document.addEventListener('click',event=>{
+    const footer=elements.sidebarFooterToggle?.closest('.friend-sidebar-footer');
+    if(state.sidebarFooterExpanded&&footer&&!footer.contains(event.target)){
+      state.sidebarFooterExpanded=false;applySidebarFooter();persistUiPreferences();
+    }
+  });
+  elements.sidebarFooterToggle?.closest('.friend-sidebar-footer')?.addEventListener('keydown',event=>{
+    if(event.key==='Escape'&&!event.isComposing&&state.sidebarFooterExpanded){
+      event.preventDefault();state.sidebarFooterExpanded=false;applySidebarFooter();persistUiPreferences();elements.sidebarFooterToggle.focus({preventScroll:true});
+    }
+  });
+
   function applySidebarMode() {
+    applySidebarFooter();
     const mode = ['normal', 'location', 'hidden'].includes(state.sidebarMode)
       ? state.sidebarMode
       : 'normal';

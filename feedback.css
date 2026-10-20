@@ -12,7 +12,7 @@ body[data-theme] :is(.notification-error,.offline-search-status.error,.favorite-
 .diagnostic-copy,.notification-error button,.notification-status button,.action-toast-message button {font:inherit;font-size:12px;border:1px solid var(--line-strong);border-radius:5px;padding:5px 8px;color:var(--text);background:var(--panel);cursor:pointer;pointer-events:auto;}
 .action-toast-message {display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .notification-status button,.notification-error button {margin-top:6px;}
-.diagnostic-copy:focus-visible,.notification-status button:focus-visible,.notification-error button:focus-visible,.action-toast-message button:focus-visible,.notification-bulk button:focus-visible {outline:2px solid var(--focus-ring,var(--accent));outline-offset:2px;}
+.diagnostic-copy:focus-visible,.notification-status button:focus-visible,.notification-error button:focus-visible,.action-toast-message button:focus-visible,.notification-bulk button:focus-visible {outline:var(--control-focus-outline, 2px solid var(--focus-ring,var(--accent)));outline-offset:2px;}
 .diagnostic-copy:hover,.notification-status button:hover,.notification-error button:hover,.action-toast-message button:hover {border-color:var(--accent);}
 body[data-theme] .updated-at[data-data-state="previous"] {color:var(--feedback-error);}
 .diagnostic-settings-row {flex-wrap:wrap;}
@@ -28,11 +28,11 @@ body[data-theme] :is(.friend-location-item,.friend-item,.participant,.private-us
 .back-to-top {position:absolute;right:18px;bottom:16px;z-index:35;width:36px;height:36px;display:grid;place-items:center;padding:0;border:1px solid var(--line-strong);border-radius:50%;background:var(--panel);color:var(--text);box-shadow:0 3px 10px rgba(0,0,0,.18);cursor:pointer;}
 .back-to-top[hidden],.settings-advanced[hidden] {display:none !important;}
 .back-to-top:hover {border-color:var(--accent);background:var(--panel-soft);}
-.back-to-top:focus-visible,.settings-more:focus-visible {outline:2px solid var(--focus-ring,var(--accent));outline-offset:2px;}
+.back-to-top:focus-visible,.settings-more:focus-visible {outline:var(--control-focus-outline, 2px solid var(--focus-ring,var(--accent)));outline-offset:2px;}
 .toolbar button.updated-at {border:0;padding:0;background:transparent;font:inherit;font-size:11px;text-align:left;cursor:pointer;appearance:none;}
 .toolbar button.updated-at:disabled {cursor:default;}
 .toolbar button.updated-at:hover:not(:disabled) {text-decoration:underline;text-underline-offset:3px;}
-.toolbar button.updated-at:focus-visible {outline:2px solid var(--focus-ring,var(--accent));outline-offset:3px;border-radius:2px;}
+.toolbar button.updated-at:focus-visible {outline:var(--control-focus-outline, 2px solid var(--focus-ring,var(--accent)));outline-offset:3px;border-radius:2px;}
 .settings-advanced {border-top:1px solid var(--line);margin-top:8px;padding-top:8px;}
 .settings-more-row {border-top:1px solid var(--line);margin-top:12px;padding-top:12px;display:flex;justify-content:center;}
 .settings-more {display:block;width:auto;max-width:100%;margin:0;padding:6px 16px;min-height:30px;border:1px solid var(--line-strong);border-radius:5px;background:var(--panel);color:var(--text);font:inherit;font-size:12px;cursor:pointer;}
