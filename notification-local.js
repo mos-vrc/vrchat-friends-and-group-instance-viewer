@@ -12,7 +12,7 @@ const thumbnail=value=>typeof value==='string'&&value.length<=24000&&/^data:imag
 function snapshot(row){
   if(!canPinNotification(row)||!notificationId(row.id))return null;
   const data={};for(const key of ['groupId','groupName','announcementTitle','announcementText','text'])if(typeof row.data?.[key]==='string')data[key]=row.data[key];
-  return {id:row.id,version:2,type:string(row.type),title:string(row.title),message:string(row.message),imageUrl:string(row.imageUrl),savedImageSource:string(row.savedImageSource),link:string(row.link),created_at:string(row.created_at||row.createdAt),data};
+  return {id:row.id,version:2,type:string(row.type),category:string(row.category),title:string(row.title),message:string(row.message),imageUrl:string(row.imageUrl),savedImageSource:string(row.savedImageSource),link:string(row.link),created_at:string(row.created_at||row.createdAt),data};
 }
 function cleanSaved(row){
   const saved=snapshot(row);if(!saved)return null;

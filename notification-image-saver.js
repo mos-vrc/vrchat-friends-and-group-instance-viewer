@@ -1,3 +1,4 @@
+import {isImagelessEventNotification} from './notifications.js';
 import {notificationThumbnail} from './notification-snapshot.js';
 // At most two captures at once. Failed jobs retry only on an explicit refresh,
 // with three total attempts per pin/document; rendering never retries failures.
@@ -7,7 +8,7 @@ export class NotificationImageSaver {
   save(row,{retry=false}={}){
     if(!this.local.imagesReady)return;
     const saved=this.local.saved.get(row.id),account=this.local.account;
-    if(!account||!saved||saved.thumbnail&&saved.thumbnailVersion===2||!(saved.savedImageSource||saved.imageUrl))return;
+    if(!account||!saved||isImagelessEventNotification(saved)||saved.thumbnail&&saved.thumbnailVersion===2||!(saved.savedImageSource||saved.imageUrl))return;
     const key=account+':'+saved.id+':'+saved.token,old=this.jobs.get(key);
     if(old&&(!retry||old.status!=='failed'||old.attempts>=3))return;
     const job={key,saved,account,epoch:this.epoch,status:'queued',attempts:(old?.attempts||0)+1,retry};

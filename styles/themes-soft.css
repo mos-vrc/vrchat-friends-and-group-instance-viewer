@@ -39,7 +39,6 @@ body[data-theme="sand"] .friend-item:hover {
   background: #f8f5f2;
 }
 body[data-theme="sand"] .friend-avatar {
-  background: #efe9e2;
   border-color: #d7d2cb;
 }
 body[data-theme="sand"] :is(.friend-search, .friend-filter, .sort, .friend-sort-select, .auto-refresh-select, .instance-size-control, .settings-button) {
@@ -193,9 +192,7 @@ body[data-theme="sand"] :is(.private-user-name, .participant-name) {
   color: #37312a;
   border-top-color: #ece5dc;
 }
-body[data-theme="sand"] :is(.private-avatar, .participant-avatar) {
-  background: #eee8e0;
-}
+
 body[data-theme="sand"] .thumb-wrap {
   background: #efe9e2;
 }
@@ -422,7 +419,6 @@ body[data-theme="mist"] .friend-item:hover {
   background: #f4f4f4;
 }
 body[data-theme="mist"] .friend-avatar {
-  background: #e8e8e8;
   border-color: #d0d0d0;
 }
 body[data-theme="mist"] :is(.friend-search, .friend-filter, .sort, .friend-sort-select, .auto-refresh-select, .instance-size-control, .settings-button) {
@@ -575,9 +571,7 @@ body[data-theme="mist"] :is(.private-user-name, .participant-name) {
   color: #303030;
   border-top-color: #e3e3e3;
 }
-body[data-theme="mist"] :is(.private-avatar, .participant-avatar) {
-  background: #e6e6e6;
-}
+
 body[data-theme="mist"] .thumb-wrap {
   background: #e8e8e8;
 }

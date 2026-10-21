@@ -1,4 +1,9 @@
 import { requireAccount } from './account-session.js';
+// Image-less event notices have no avatar column, including older saved pins
+// whose snapshots predate the category field.
+export function isImagelessEventNotification(row) {
+  return row?.version===2 && (row.category==='event' || !row.category&&String(row.type||'').startsWith('group.event.')) && !row.imageUrl;
+}
 // Account-scoped memory only. Notification text is rendered as text, never HTML.
 export const notificationId = value => /^(?:not|frq)_[A-Za-z0-9_-]+$/.test(value || '');
 export const userId = value => /^usr_[A-Za-z0-9_-]+$/.test(value || '');

@@ -491,7 +491,6 @@ body[data-instance-size="large"] {
   object-fit: cover;
   border: 1px solid rgba(139, 185, 222, .24);
   border-radius: 50%;
-  background: #243343;
 }
 .friend-location-avatar-empty { opacity: .7; }
 .friend-location-online-dot {

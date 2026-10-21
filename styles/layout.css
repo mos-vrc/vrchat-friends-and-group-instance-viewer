@@ -274,7 +274,8 @@ body[data-instance-display] .friend-location-item:has(> .instance-load-feedback)
   .instance-size-control {max-width:100%;}
 }
 
-.avatar-fallback {background-color:#1b1c1f;}
+/* Transparent user artwork always sits on the same dark surface. */
+.friend-avatar,.friend-location-avatar,.participant-avatar,.private-avatar,.avatar-fallback {background:#1b1c1f;}
 img.avatar-fallback[src$="user-placeholder.svg"] {background:#1b1c1f;border-radius:50%;opacity:1;}
 
 body[data-theme] .friend-sidebar-footer {position:absolute;left:auto;right:8px;bottom:8px;z-index:33;width:32px;max-width:calc(100% - 16px);padding:0;border:0;background:transparent;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none;box-sizing:border-box;}

@@ -1,5 +1,5 @@
 import {canPinNotification} from './notification-local.js';
-import {notificationDetails,notificationContentUrl,notificationLocation,notificationReadResponse,canReply,replySlot,REPLY_MAX_LENGTH,userId as notificationUserId} from './notifications.js';
+import {isImagelessEventNotification,notificationDetails,notificationContentUrl,notificationLocation,notificationReadResponse,canReply,replySlot,REPLY_MAX_LENGTH,userId as notificationUserId} from './notifications.js';
 import {escapeHtml} from './domain.js';
 import {formatActivityDateTime} from './ui-format.js';
 import {t} from './i18n.js';
@@ -29,14 +29,15 @@ export function renderNotificationList({store, state, notificationBusy, notifica
     if(row.__savedOnly)actions='';
     const title=row.version===2?(row.title||data.announcementTitle||''):'';
     const message=row.message||details.responseMessage||details.inviteMessage||details.requestMessage||data.announcementText||data.text||'';
-    const savedImage=local?.imageUrl?.(row)||'';
-    const notificationImage=row.version===2&&!savedImage?displayImageUrl(row.imageUrl||row.savedImageSource||'',row.imageUrl?'world':'avatar'):'';
-    const groupImage=groupNotification&&!notificationImage?displayImageUrl(groupProfile?.iconUrl||'','avatar'):'';
+    const omitImage=isImagelessEventNotification(row);
+    const savedImage=omitImage?'':local?.imageUrl?.(row)||'';
+    const notificationImage=row.version===2&&!omitImage&&!savedImage?displayImageUrl(row.imageUrl||row.savedImageSource||'',row.imageUrl?'world':'avatar'):'';
+    const groupImage=!omitImage&&groupNotification&&!notificationImage?displayImageUrl(groupProfile?.iconUrl||'','avatar'):'';
     const image=row.version===2?(savedImage||notificationImage||groupImage):userThumbnail?friendAvatarUrl(senderProfile||{}):'';
     const person=`<span class="notification-avatar-placeholder" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg></span>`;
     const imageMarkup=image?`<img class="notification-image${userThumbnail?' avatar-fallback':''}" ${savedImage?'src':'data-image-src'}="${escapeHtml(image)}" alt="" decoding="async">`:'';
     const picture=image?(userThumbnail?renderFramedAvatar(senderProfile,imageMarkup):imageMarkup):userThumbnail?'<img class="notification-image avatar-fallback" src="user-placeholder.svg" alt="" decoding="async">':person;
-    const thumbnail=userThumbnail?`<div class="notification-avatar" data-notification-user-id="${escapeHtml(row.senderUserId||'')}">${profile?`<a href="${escapeHtml(profile)}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(String(sender))}">${picture}</a>`:picture}</div>`:groupImage?`<div class="notification-avatar" ${row.__saved?'':`data-notification-group-id="${escapeHtml(data.groupId||'')}"`}>${picture}</div>`:image?picture:groupNotification?`<div class="notification-avatar" ${row.__saved?'':`data-notification-group-id="${escapeHtml(data.groupId||'')}"`}>${person}</div>`:'';
+    const thumbnail=omitImage?'':userThumbnail?`<div class="notification-avatar" data-notification-user-id="${escapeHtml(row.senderUserId||'')}">${profile?`<a href="${escapeHtml(profile)}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(String(sender))}">${picture}</a>`:picture}</div>`:groupImage?`<div class="notification-avatar" ${row.__saved?'':`data-notification-group-id="${escapeHtml(data.groupId||'')}"`}>${picture}</div>`:image?picture:groupNotification?`<div class="notification-avatar" ${row.__saved?'':`data-notification-group-id="${escapeHtml(data.groupId||'')}"`}>${person}</div>`:'';
     const choice=notificationReply?.id===row.id?replySlot(notificationReply.rows,notificationReply.text):null;
     const note=choice?.update?t('入力文をVRChatの返信文枠へ保存して送信します。変更後は約1時間再変更できません。'):t('返信は最大64文字です。変更可能な返信文枠が必要です。');
     const reply=notificationReply?.id===row.id?`<div class="notification-reply"><label>${escapeHtml(t('返信メッセージ'))}<textarea data-notification-text maxlength="${REPLY_MAX_LENGTH}" rows="2"${notificationBusy?' disabled':''}>${escapeHtml(notificationReply.text)}</textarea></label><span data-notification-length>${notificationReply.text.length} / ${REPLY_MAX_LENGTH}</span><div class="notification-reply-note">${escapeHtml(note)}</div><button type="button" data-notification-id="${id}" data-notification-action="reply"${disabled||!notificationReply.text.trim()?' disabled':''}>${escapeHtml(t('送信'))}</button>${button('cancel-reply','キャンセル')}</div>`:'';

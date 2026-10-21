@@ -40,7 +40,7 @@
 .notification-avatar {width:84px;height:56px;flex:none;overflow:hidden;border-radius:4px;background:var(--panel);}
 .notification-avatar>a {display:block;width:100%;height:100%;}
 .notification-avatar .notification-image {display:block;width:100%;height:100%;object-fit:cover;object-position:center;}
-.notification-avatar-placeholder {display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:rgba(128,148,170,.15);color:var(--text-muted);}
+.notification-avatar-placeholder {display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#1b1c1f;color:#c4c7cc;}
 .notification-avatar-placeholder svg {width:30px;height:30px;}
 @media(max-width:460px){.notification-avatar {width:60px;height:42px;}}
 .notification-panel-header .reload-icon {width:18px;height:18px;display:block;margin:auto;}
