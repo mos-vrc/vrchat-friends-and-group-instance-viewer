@@ -6,5 +6,5 @@ iPhone（Safari）で VRChat の Favorite フレンドの居場所を確認す�
 
 ![導入方法](install-guide.png)
 
-- ファイル: [vrc-viewer-mobile.user.js](vrc-viewer-mobile.user.js)
+- ファイル: [vrc-viewer-mobile.user.js](vrc-viewer-mobile.user.js)（バージョン 0.5.4）
 - 動作確認: iPhone SE（第3世代）+ Safari + Userscripts アプリ
