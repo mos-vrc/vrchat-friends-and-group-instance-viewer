@@ -113,7 +113,7 @@ jobs:
             STATE="$(jq -r '.lastAsyncUploadState // "UNKNOWN"' status.json)"
             echo "poll $TRIES: $STATE"
           done
-          if [ "$STATE" != "SUCCESS" ]; then
+          if [ "$STATE" != "SUCCEEDED" ]; then
             echo "Upload did not succeed (state: $STATE)."
             exit 1
           fi
