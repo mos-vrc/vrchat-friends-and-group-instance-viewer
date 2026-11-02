@@ -1,7 +1,7 @@
 import {canPinNotification} from './notification-local.js';
 import {isImagelessEventNotification,notificationDetails,notificationContentUrl,notificationLocation,notificationReadResponse,canReply,replySlot,REPLY_MAX_LENGTH,userId as notificationUserId} from './notifications.js';
 import {escapeHtml} from './domain.js';
-import {formatActivityDateTime} from './ui-format.js';
+import {formatActivityDateTime,normalizeFractionGlyphs} from './ui-format.js';
 import {t} from './i18n.js';
 // Pure markup. UI lifetime and request control stay with the application.
 export function renderNotificationList({store, state, notificationBusy, notificationReply, notificationSenderProfile, buildInstanceLaunchUrl, buildUserProfileUrl, displayImageUrl, friendAvatarUrl, renderLimit=100,local=null,renderFramedAvatar=(_,markup)=>markup,notificationGroupProfile=()=>null}){
@@ -27,8 +27,8 @@ export function renderNotificationList({store, state, notificationBusy, notifica
     const eventUrl=notificationContentUrl(row);
     const linkedText=value=>eventUrl?`<a href="${escapeHtml(eventUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(String(value))}</a>`:escapeHtml(String(value));
     if(row.__savedOnly)actions='';
-    const title=row.version===2?(row.title||data.announcementTitle||''):'';
-    const message=row.message||details.responseMessage||details.inviteMessage||details.requestMessage||data.announcementText||data.text||'';
+    const title=normalizeFractionGlyphs(row.version===2?(row.title||data.announcementTitle||''):'');
+    const message=normalizeFractionGlyphs(row.message||details.responseMessage||details.inviteMessage||details.requestMessage||data.announcementText||data.text||'');
     const omitImage=isImagelessEventNotification(row);
     const savedImage=omitImage?'':local?.imageUrl?.(row)||'';
     const notificationImage=row.version===2&&!omitImage&&!savedImage?displayImageUrl(row.imageUrl||row.savedImageSource||'',row.imageUrl?'world':'avatar'):'';
