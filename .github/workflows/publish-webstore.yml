@@ -37,7 +37,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/pkg"
           cp -a . "$RUNNER_TEMP/pkg-src"
           cd "$RUNNER_TEMP/pkg-src"
-          rm -rf .git .github
+          rm -rf .git .github userscript
           rm -f CHANGELOG.md PRIVACY.md README.md SECURITY.md VALIDATION.md
           # Regenerate the webstore checksum list so it matches the package
           # (same rule as the local builds: list only shipped files).
