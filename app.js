@@ -64,6 +64,7 @@ const elements = {
   reloadButton: document.getElementById('reloadButton'),
   recentButton: document.getElementById('recentButton'),
   calendarButton: document.getElementById('calendarButton'),
+  calendarPopup: document.getElementById('calendarPopup'),
 
   notificationsButton: document.getElementById('notificationsButton'),
   notificationCount: document.getElementById('notificationCount'),
@@ -89,7 +90,7 @@ let calendarView = {
   cursor: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
   accountId: '', monthKey: '', events: [], groups: new Map(), groupPending: new Set(),
   loading: false, error: null, partial: false, ready: false, token: 0,
-  selectedDay: '', selectedEventId: '',
+  selectedDay: '', selectedEventId: '', popupAnchor: null,
 };
 
 const VIEW_MODES = Object.freeze({
@@ -965,24 +966,51 @@ async function prefetchCalendarGroups(view, current) {
 }
 
 function renderCalendarBelow() {
+  return `<div class="calendar-below">${renderCalendarDayList({ view: calendarView, locale: getLocale() })}</div>`;
+}
+
+// The event detail floats next to the click that opened it, like the
+// official calendar's popover; the day list below the grid still updates
+// so both stay visible together.
+function renderCalendarPopup() {
+  const panel = elements.calendarPopup;
+  if (!panel) return;
   const view = calendarView;
-  const event = view.events.find((row) => row.id === view.selectedEventId) || null;
-  const group = event ? view.groups.get(event.ownerId) || null : null;
+  const event = state.viewMode === VIEW_MODES.CALENDAR
+    ? view.events.find((row) => row.id === view.selectedEventId) || null
+    : null;
+  if (!event) {
+    panel.classList.add('hidden');
+    patchMarkup(panel, '');
+    return;
+  }
+  const group = view.groups.get(event.ownerId) || null;
   // Events without their own image fall back to the group's image, then
   // its icon, mirroring the official event detail.
-  const rawImage = event ? (event.imageUrl || group?.imageUrl || group?.iconUrl || '') : '';
-  const detail = event ? renderCalendarEventDetail({
+  const rawImage = event.imageUrl || group?.imageUrl || group?.iconUrl || '';
+  patchMarkup(panel, renderCalendarEventDetail({
     event,
     group: group ? { name: group.name, iconUrl: group.iconUrl ? displayImageUrl(group.iconUrl, 'avatar') : '' } : null,
     detailImageUrl: rawImage ? displayImageUrl(rawImage, 'world') : '',
     locale: getLocale(),
-  }) : '';
-  return `<div class="calendar-below">${renderCalendarDayList({ view, locale: getLocale() })}${detail}</div>`;
+  }));
+  panel.classList.remove('hidden');
+  const anchor = view.popupAnchor;
+  if (anchor) {
+    const width = 320;
+    const height = panel.offsetHeight || 380;
+    panel.style.left = `${Math.max(8, Math.min(anchor.x + 14, window.innerWidth - width - 8))}px`;
+    panel.style.top = `${Math.max(8, Math.min(anchor.y + 10, window.innerHeight - height - 8))}px`;
+    panel.style.transform = 'none';
+  } else {
+    panel.style.left = ''; panel.style.top = ''; panel.style.transform = '';
+  }
 }
 
 function closeCalendarEventPopup() {
   if (!calendarView.selectedEventId) return;
   calendarView.selectedEventId = '';
+  calendarView.popupAnchor = null;
   render({ resetScroll: false });
 }
 
@@ -1005,10 +1033,10 @@ function onCalendarViewClick(event) {
   const eventRow = event.target.closest('[data-calendar-event]');
   if (eventRow) {
     calendarView.selectedEventId = eventRow.dataset.calendarEvent;
+    calendarView.popupAnchor = { x: event.clientX || 0, y: event.clientY || 0 };
     const picked = calendarView.events.find((row) => row.id === calendarView.selectedEventId);
     if (picked) calendarView.selectedDay = calendarEventDayKey(picked);
     render({ resetScroll: false });
-    elements.list.querySelector('.calendar-below')?.scrollIntoView({ block: 'nearest' });
     return;
   }
   const day = event.target.closest('[data-calendar-day]');
@@ -2393,6 +2421,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   updateReloadButton();
   resumeAutoRefresh();
   renderNotificationPanel();
+  renderCalendarPopup();
   hideFriendInstancePreview({ immediate: true });
   closeFavoriteMenu();
   const friendScroll = elements.friendList?.scrollTop || 0;
@@ -3173,6 +3202,9 @@ elements.copyDiagnosticButton?.addEventListener('click',copyDiagnostics);
 elements.copyStatusDiagnostic?.addEventListener('click',copyDiagnostics);
 elements.recentButton?.addEventListener('click', setRecentView);
 elements.calendarButton?.addEventListener('click', setCalendarView);
+elements.calendarPopup?.addEventListener('click', (event) => {
+  if (event.target.closest('[data-calendar-popup-close]')) closeCalendarEventPopup();
+});
 
 elements.notificationsButton?.addEventListener('click',()=>setNotificationPanelOpen(elements.notificationPanel.classList.contains('hidden')));
 elements.notificationPanel.addEventListener('click',onNotificationClick);

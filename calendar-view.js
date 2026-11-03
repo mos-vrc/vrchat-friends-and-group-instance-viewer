@@ -101,8 +101,11 @@ export function calendarIsRecurring(event) {
 
 const MAX_BAR_LANES = 3;
 
-// Split one week's events into spanning bars (multi-day events, drawn
-// across the day cells like the official calendar) and per-day chips.
+// Split one week's events into spanning bars and per-day chips. A bar is
+// rendered as one segment inside each day cell it touches (segments bleed
+// into the neighbouring cell so they read as one continuous bar, like the
+// official calendar), which keeps every segment anchored to its real day
+// cell instead of relying on overlay positioning.
 function planWeek(week, events) {
   const weekStartKey = week[0].key;
   const bars = [];
@@ -114,8 +117,9 @@ function planWeek(week, events) {
     const endIdx = dayIndexBetween(weekStartKey, endKey);
     if (endIdx < 0 || startIdx > 6) continue;
     const from = Math.max(0, startIdx), to = Math.min(6, endIdx);
-    if (to > from || startIdx < 0) bars.push({ event, from, to });
-    else chipsByDay.get(week[startIdx].key)?.push(event);
+    if (to > from || startIdx < 0) {
+      bars.push({ event, from, to, cutLeft: startIdx < 0, cutRight: endIdx > 6 });
+    } else chipsByDay.get(week[startIdx].key)?.push(event);
   }
   bars.sort((a, b) => a.from - b.from || (b.to - b.from) - (a.to - a.from));
   const laneEnds = [];
@@ -131,11 +135,23 @@ function planWeek(week, events) {
     laneEnds[lane] = bar.to;
     bar.lane = lane;
   }
-  const visibleBars = bars.filter(bar => bar.lane >= 0);
+  const segmentsByDay = new Map(week.map(day => [day.key, []]));
+  for (const bar of bars) {
+    if (bar.lane < 0) continue;
+    for (let col = bar.from; col <= bar.to; col += 1) {
+      segmentsByDay.get(week[col].key)?.push({
+        event: bar.event,
+        lane: bar.lane,
+        isStart: col === bar.from && !bar.cutLeft,
+        isEnd: col === bar.to && !bar.cutRight,
+        showTitle: col === bar.from,
+      });
+    }
+  }
   for (const chips of chipsByDay.values()) {
     chips.sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt)));
   }
-  return { bars: visibleBars, chipsByDay, laneCount: Math.min(laneEnds.length, MAX_BAR_LANES) };
+  return { segmentsByDay, chipsByDay, laneCount: Math.min(laneEnds.length, MAX_BAR_LANES) };
 }
 
 export function renderCalendarMonth({ view, locale }) {
@@ -150,22 +166,25 @@ export function renderCalendarMonth({ view, locale }) {
     : (view.ready && !view.events.length) ? t('この月のイベントはありません。')
     : '';
   const weeksHtml = weeks.map(week => {
-    const { bars, chipsByDay, laneCount } = planWeek(week, view.events);
+    const { segmentsByDay, chipsByDay, laneCount } = planWeek(week, view.events);
     const cells = week.map(day => {
       const chips = chipsByDay.get(day.key) || [];
       const shown = chips.slice(0, 3);
       const more = chips.length - shown.length;
+      const segments = segmentsByDay.get(day.key) || [];
+      const lanesHtml = laneCount ? `<span class="calendar-lanes">${[...Array(laneCount)].map((_, lane) => {
+        const segment = segments.find(row => row.lane === lane);
+        if (!segment) return '<span class="calendar-lane-empty"></span>';
+        return `<span class="calendar-seg${segment.isStart ? ' start' : ''}${segment.isEnd ? ' end' : ''}" data-calendar-event="${escapeHtml(segment.event.id)}" title="${escapeHtml(segment.event.title || '')}">${segment.showTitle ? escapeHtml(segment.event.title || '') : ''}</span>`;
+      }).join('')}</span>` : '';
       return `<button type="button" class="calendar-day${day.inMonth ? '' : ' outside'}${day.key === todayKey ? ' today' : ''}${day.key === view.selectedDay ? ' selected' : ''}" data-calendar-day="${day.key}" aria-label="${day.key}">
         <span class="calendar-day-number">${day.date.getDate()}</span>
+        ${lanesHtml}
         <span class="calendar-day-chips">${shown.map(event =>
           `<span class="calendar-chip" data-calendar-event="${escapeHtml(event.id)}" title="${escapeHtml(event.title || '')}">${escapeHtml(event.title || '')}</span>`).join('')}${more > 0 ? `<span class="calendar-more">+${more}</span>` : ''}</span>
       </button>`;
     }).join('');
-    const barsHtml = bars.map(bar => {
-      const span = bar.to - bar.from + 1;
-      return `<button type="button" class="calendar-bar" data-calendar-event="${escapeHtml(bar.event.id)}" title="${escapeHtml(bar.event.title || '')}" style="left:calc((100% / 7) * ${bar.from} + 3px);width:calc((100% / 7) * ${span} - 6px);top:${26 + bar.lane * 22}px">${escapeHtml(bar.event.title || '')}</button>`;
-    }).join('');
-    return `<div class="calendar-week" style="--bar-lanes:${laneCount}">${cells}<div class="calendar-bars">${barsHtml}</div></div>`;
+    return `<div class="calendar-week">${cells}</div>`;
   }).join('');
   return `<div class="calendar-view">
     <div class="calendar-header">
