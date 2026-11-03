@@ -1041,9 +1041,10 @@ function onCalendarViewClick(event) {
   }
   const day = event.target.closest('[data-calendar-day]');
   if (day) {
+    // Deliberately no scrollIntoView: selecting a day must never move
+    // the viewport; the user scrolls to the day list on their own terms.
     calendarView.selectedDay = day.dataset.calendarDay;
     render({ resetScroll: false });
-    elements.list.querySelector('.calendar-day-list')?.scrollIntoView({ block: 'nearest' });
   }
 }
 
