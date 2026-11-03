@@ -343,7 +343,15 @@ const english = Object.freeze({
   "（": " (",
   "各": "each: ",
   "インスタンス": "instances",
-  "・": " / "
+  "・": " / ",
+  "イベントカレンダー": "Event calendar",
+  "イベント詳細": "Event details",
+  "イベントを取得できませんでした。更新ボタンで再取得してください。": "Could not load events. Use the refresh button to try again.",
+  "この月のイベントはありません。": "No events this month.",
+  "この日のイベントはありません。": "No events on this day.",
+  "今日": "Today",
+  "グループ": "Group",
+  "興味あり": "Interested"
 });
 const ordered = Object.keys(english).sort((a,b) => b.length-a.length);
 const pattern = new RegExp(ordered.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');

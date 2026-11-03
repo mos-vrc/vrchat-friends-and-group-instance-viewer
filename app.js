@@ -7,6 +7,7 @@ import { IconFrameCatalog, FrameAnimations, framedAvatar } from "./icon-frames.j
 import { NotificationLocal, canPinNotification, MEMO_MAX_LENGTH } from "./notification-local.js";
 import { elapsedUpdateLabel } from "./update-time.js";
 import { renderNotificationList } from "./notification-view.js";
+import { renderCalendarMonth, renderCalendarEventPopup } from "./calendar-view.js";
 import { summarizeGroupInstances, diagnosticLog } from "./diagnostics.js";
 import { refreshIsBlocked } from "./refresh-policy.js";
 import { NotificationStore, replySlot, REPLY_MAX_LENGTH, bulkNotificationAction, userId as notificationUserId } from "./notifications.js";
@@ -62,6 +63,8 @@ const elements = {
   autoRefresh: document.getElementById('autoRefresh'),
   reloadButton: document.getElementById('reloadButton'),
   recentButton: document.getElementById('recentButton'),
+  calendarButton: document.getElementById('calendarButton'),
+  calendarPopup: document.getElementById('calendarPopup'),
   notificationsButton: document.getElementById('notificationsButton'),
   notificationCount: document.getElementById('notificationCount'),
   notificationPanel: document.getElementById('notificationPanel'),
@@ -82,11 +85,18 @@ let notifications=null, notificationBusy=false, notificationReply=null, notifica
 let notificationMemoComposing=false;
 let worldCatalog = new WorldCatalog();
 let worldView = { selected: 'recent', loading: false, error: null, token: 0, editor: null };
+let calendarView = {
+  cursor: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+  accountId: '', monthKey: '', events: [], groups: new Map(), groupPending: new Set(),
+  loading: false, error: null, partial: false, ready: false, token: 0,
+  selectedDay: '', selectedEventId: '',
+};
 
 const VIEW_MODES = Object.freeze({
   INSTANCES: 'instances',
   FRIENDS: 'friends',
   RECENT: 'recent',
+  CALENDAR: 'calendar',
 });
 
 const FRIEND_VIEW_SORTS = Object.freeze({
@@ -530,7 +540,7 @@ function showActionToast(message, options = {}) {
 
 function applyMainSortOptions() {
   if (!elements.sort) return;
-  elements.sort.hidden = state.viewMode === VIEW_MODES.RECENT;
+  elements.sort.hidden = state.viewMode === VIEW_MODES.RECENT || state.viewMode === VIEW_MODES.CALENDAR;
   if (state.viewMode === VIEW_MODES.FRIENDS) {
     elements.sort.innerHTML = lt`
       <option value="name">名前順</option>
@@ -555,6 +565,8 @@ function updateTabButtons() {
 
   elements.recentButton?.classList.toggle('active', state.viewMode === VIEW_MODES.RECENT);
   elements.recentButton?.setAttribute('aria-pressed', String(state.viewMode === VIEW_MODES.RECENT));
+  elements.calendarButton?.classList.toggle('active', state.viewMode === VIEW_MODES.CALENDAR);
+  elements.calendarButton?.setAttribute('aria-pressed', String(state.viewMode === VIEW_MODES.CALENDAR));
   document.querySelectorAll('.tab').forEach((button) => {
     const isFriendView = button.dataset.view === VIEW_MODES.FRIENDS;
     const active = isFriendView
@@ -886,6 +898,113 @@ function setRecentView() {
   state.viewMode = VIEW_MODES.RECENT;
   clearInstanceHighlight(); applyMainSortOptions(); persistUiPreferences();
   render({ resetScroll: true }); void loadWorldView();
+}
+
+function calendarMonthKeyOf(date) {
+  return `${date.getFullYear()}-${date.getMonth()}`;
+}
+
+function setCalendarView() {
+  state.viewMode = VIEW_MODES.CALENDAR;
+  clearInstanceHighlight(); applyMainSortOptions(); persistUiPreferences();
+  render({ resetScroll: true }); void loadCalendarMonth({ ifNeeded: true });
+}
+
+async function loadCalendarMonth({ ifNeeded = false } = {}) {
+  if (!state.user || calendarView.loading) return;
+  const view = calendarView, repo = repository;
+  const generation = state.loadGeneration, account = state.user.id;
+  const token = (view.token += 1);
+  const monthKey = calendarMonthKeyOf(view.cursor);
+  if (ifNeeded && view.ready && view.accountId === account && view.monthKey === monthKey) { render(); return; }
+  const current = () => view === calendarView && token === view.token && generation === state.loadGeneration
+    && state.user?.id === account && repo === repository;
+  view.loading = true; view.error = null;
+  render();
+  try {
+    const dateIso = new Date(view.cursor.getFullYear(), view.cursor.getMonth(), 1).toISOString();
+    const { events, partial } = await repo.fetchCalendarMonth(dateIso);
+    if (!current()) return;
+    view.events = events; view.partial = partial; view.ready = true;
+    view.accountId = account; view.monthKey = monthKey;
+    void prefetchCalendarGroups(view, current);
+  } catch (error) {
+    if (!current()) return;
+    if (error?.status === 401) { handleSessionExpired(); return; }
+    view.error = error;
+  } finally {
+    if (current()) { view.loading = false; if (state.viewMode === VIEW_MODES.CALENDAR) render(); }
+  }
+}
+
+// Group names/icons for the day list and the detail popup. Fetched lazily
+// after the month renders; failures keep the generic fallback label.
+async function prefetchCalendarGroups(view, current) {
+  const ids = [...new Set(view.events.map((event) => event?.ownerId).filter((id) => typeof id === 'string' && id.startsWith('grp_')))];
+  let changed = false;
+  for (const id of ids) {
+    if (!current()) return;
+    if (view.groups.has(id) || view.groupPending.has(id)) continue;
+    view.groupPending.add(id);
+    try {
+      const group = await repository.api.fetchGroup(id);
+      if (!current()) return;
+      if (group?.id) { view.groups.set(id, { name: group.name || '', iconUrl: group.iconUrl || '' }); changed = true; }
+    } catch { /* keep the fallback label */ } finally { view.groupPending.delete(id); }
+  }
+  if (changed && current() && state.viewMode === VIEW_MODES.CALENDAR) render({ resetScroll: false });
+}
+
+function renderCalendarPopup() {
+  const panel = elements.calendarPopup;
+  if (!panel) return;
+  const event = state.viewMode === VIEW_MODES.CALENDAR
+    ? calendarView.events.find((row) => row.id === calendarView.selectedEventId)
+    : null;
+  if (!event) {
+    if (calendarView.selectedEventId && state.viewMode !== VIEW_MODES.CALENDAR) calendarView.selectedEventId = '';
+    panel.classList.add('hidden');
+    patchMarkup(panel, '');
+    return;
+  }
+  patchMarkup(panel, renderCalendarEventPopup({
+    event,
+    group: calendarView.groups.get(event.ownerId) || null,
+    displayImageUrl,
+    locale: getLocale(),
+  }));
+  panel.classList.remove('hidden');
+}
+
+function closeCalendarEventPopup() {
+  if (!calendarView.selectedEventId) return;
+  calendarView.selectedEventId = '';
+  renderCalendarPopup();
+}
+
+function onCalendarViewClick(event) {
+  if (state.viewMode !== VIEW_MODES.CALENDAR) return;
+  const nav = event.target.closest('[data-calendar-nav]');
+  if (nav) {
+    const view = calendarView;
+    view.token += 1; view.loading = false; view.selectedEventId = '';
+    if (nav.dataset.calendarNav === 'today') {
+      view.cursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    } else {
+      view.cursor = new Date(view.cursor.getFullYear(), view.cursor.getMonth() + (nav.dataset.calendarNav === 'next' ? 1 : -1), 1);
+    }
+    view.selectedDay = '';
+    render({ resetScroll: true }); void loadCalendarMonth();
+    return;
+  }
+  const eventRow = event.target.closest('[data-calendar-event]');
+  if (eventRow) { calendarView.selectedEventId = eventRow.dataset.calendarEvent; renderCalendarPopup(); return; }
+  const day = event.target.closest('[data-calendar-day]');
+  if (day) {
+    calendarView.selectedDay = day.dataset.calendarDay;
+    render({ resetScroll: false });
+    elements.list.querySelector('.calendar-day-list')?.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 async function loadWorldView({force=false}={}) {
@@ -2262,6 +2381,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   updateReloadButton();
   resumeAutoRefresh();
   renderNotificationPanel();
+  renderCalendarPopup();
   hideFriendInstancePreview({ immediate: true });
   closeFavoriteMenu();
   const friendScroll = elements.friendList?.scrollTop || 0;
@@ -2270,6 +2390,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
 
   updateTabButtons();
   elements.list.classList.toggle('world-view', state.viewMode === VIEW_MODES.RECENT);
+  elements.list.classList.toggle('calendar-view', state.viewMode === VIEW_MODES.CALENDAR);
   renderFriendSidebar();
 
   const manifest = globalThis.chrome?.runtime?.getManifest?.();
@@ -2277,6 +2398,8 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
   if (state.viewMode === VIEW_MODES.RECENT) {
     patchMarkup(elements.list, `${renderRecentWorlds()}${credit}`);
+  } else if (state.viewMode === VIEW_MODES.CALENDAR) {
+    patchMarkup(elements.list, `${renderCalendarMonth({ view: calendarView, locale: getLocale() })}${credit}`);
   } else if (state.viewMode === VIEW_MODES.FRIENDS) {
     patchMarkup(elements.list, `${renderFriendLocationView()}${credit}`);
   } else {
@@ -2991,6 +3114,7 @@ elements.list?.addEventListener('keydown',event=>{
   event.preventDefault();tabs[next].focus();tabs[next].click();
 });
 elements.list?.addEventListener('click', onWorldViewClick);
+elements.list?.addEventListener('click', onCalendarViewClick);
 elements.friendInstancePreview?.addEventListener('click', onWorldViewClick);
 elements.list?.addEventListener('submit', event=>{void saveWorldListName(event)});
 elements.list?.addEventListener('input', event=>{if(event.target.matches('.world-list-name') && worldView.editor && !worldView.editor.saving){worldView.editor.draft=event.target.value;event.target.closest('form').querySelector('.world-name-count').textContent=`${event.target.value.length} / 20`;}});
@@ -3037,6 +3161,10 @@ elements.loginButton?.addEventListener('click', () => {
 elements.copyDiagnosticButton?.addEventListener('click',copyDiagnostics);
 elements.copyStatusDiagnostic?.addEventListener('click',copyDiagnostics);
 elements.recentButton?.addEventListener('click', setRecentView);
+elements.calendarButton?.addEventListener('click', setCalendarView);
+elements.calendarPopup?.addEventListener('click', (event) => {
+  if (event.target.closest('[data-calendar-popup-close]') || event.target === elements.calendarPopup) closeCalendarEventPopup();
+});
 elements.notificationsButton?.addEventListener('click',()=>setNotificationPanelOpen(elements.notificationPanel.classList.contains('hidden')));
 elements.notificationPanel.addEventListener('click',onNotificationClick);
 elements.notificationPanel.addEventListener('scroll',scheduleNotificationProfiles,{passive:true,capture:true});
@@ -3068,6 +3196,7 @@ async function refreshCurrentView() {
   const needsPrimaryRetry = !state.user || state.loadFailed || state.groupLoadFailed
     || (elements.showOffline?.checked && state.offlineNameLoad.failed);
   if (!needsPrimaryRetry && state.viewMode === VIEW_MODES.RECENT) { worldView.editor=null; await loadWorldView({ force: true }); return; }
+  if (!needsPrimaryRetry && state.viewMode === VIEW_MODES.CALENDAR) { await loadCalendarMonth(); return; }
   await load({ reason: 'manual' });
 }
 elements.reloadButton?.addEventListener('click', refreshCurrentView);

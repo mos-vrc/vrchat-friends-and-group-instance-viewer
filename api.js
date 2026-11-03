@@ -243,6 +243,24 @@ export class VrchatApiClient {
   fetchUser(userId) {
     return this.fetchJson(`/users/${encodeURIComponent(userId)}`);
   }
+
+  // Calendar list endpoints answer an offset-paginated object
+  // ({results, hasNext, totalCount}), not a bare array, so they cannot use
+  // fetchListPages. kind is '', 'following' or 'featured'; dateIso selects
+  // the month (the API reads the month out of the date-time value).
+  async fetchCalendarEvents(kind, dateIso) {
+    const base = kind ? `/calendar/${kind}` : '/calendar';
+    const rows = [];
+    let offset = 0;
+    for (let page = 0; page < 50; page += 1) {
+      const data = await this.fetchJson(`${base}?date=${encodeURIComponent(dateIso)}&n=100&offset=${offset}`);
+      const results = Array.isArray(data?.results) ? data.results : [];
+      rows.push(...results);
+      if (!data?.hasNext || !results.length) break;
+      offset += results.length;
+    }
+    return rows;
+  }
 }
 
 function isValidInviteLocation(location) {
@@ -592,6 +610,33 @@ export class DataRepository {
       }
       throw error;
     }
+  }
+
+  // The official calendar mixes events from the user's groups, events the
+  // user follows, and featured events. Fetch all three month lists and merge
+  // them by event id; a single failing list degrades to a partial result
+  // instead of failing the whole month.
+  async fetchCalendarMonth(dateIso) {
+    this.requireCurrentUser();
+    const kinds = ['', 'following', 'featured'];
+    const lists = [];
+    let failures = 0;
+    let firstError = null;
+    for (const kind of kinds) {
+      try {
+        lists.push(await this.api.fetchCalendarEvents(kind, dateIso));
+      } catch (error) {
+        if (error?.name === 'AbortError' || error?.status === 401) throw error;
+        failures += 1;
+        if (!firstError) firstError = error;
+      }
+    }
+    if (failures === kinds.length) throw firstError;
+    const events = dedupeById(lists.flat().filter((event) => (
+      event && typeof event.id === 'string' && typeof event.startsAt === 'string' && !event.deletedAt
+    )));
+    events.sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt)));
+    return { events, partial: failures > 0 };
   }
 
   cacheFriendProfiles(friends) {
