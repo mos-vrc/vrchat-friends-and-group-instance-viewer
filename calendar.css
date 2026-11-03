@@ -53,9 +53,11 @@
 .calendar-seg.start { margin-left: 0; border-radius: 4px 0 0 4px; }
 .calendar-seg.end { margin-right: 0; border-radius: 0 4px 4px 0; }
 .calendar-seg.start.end { margin: 0; border-radius: 4px; }
+.calendar-seg.join-l { border-left-width: 0; }
+.calendar-seg.join-r { border-right-width: 0; }
 .calendar-day-chips { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .calendar-chip {
-  font-size: 11px; line-height: 1.5; padding: 0 5px; min-width: 0; box-sizing: border-box;
+  font-size: 11px; height: 19px; line-height: 17px; padding: 0 5px; min-width: 0; box-sizing: border-box;
   background: var(--panel-strong, rgba(255,255,255,.08));
   border: 1px solid var(--line-strong, rgba(255,255,255,.16));
   border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

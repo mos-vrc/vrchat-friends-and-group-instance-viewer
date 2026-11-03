@@ -144,6 +144,8 @@ function planWeek(week, events) {
         lane: bar.lane,
         isStart: col === bar.from && !bar.cutLeft,
         isEnd: col === bar.to && !bar.cutRight,
+        joinLeft: col > bar.from || bar.cutLeft,
+        joinRight: col < bar.to || bar.cutRight,
         showTitle: col === bar.from,
       });
     }
@@ -175,7 +177,7 @@ export function renderCalendarMonth({ view, locale }) {
       const lanesHtml = laneCount ? `<span class="calendar-lanes">${[...Array(laneCount)].map((_, lane) => {
         const segment = segments.find(row => row.lane === lane);
         if (!segment) return '<span class="calendar-lane-empty"></span>';
-        return `<span class="calendar-seg${segment.isStart ? ' start' : ''}${segment.isEnd ? ' end' : ''}" data-calendar-event="${escapeHtml(segment.event.id)}" title="${escapeHtml(segment.event.title || '')}">${segment.showTitle ? escapeHtml(segment.event.title || '') : ''}</span>`;
+        return `<span class="calendar-seg${segment.isStart ? ' start' : ''}${segment.isEnd ? ' end' : ''}${segment.joinLeft ? ' join-l' : ''}${segment.joinRight ? ' join-r' : ''}" data-calendar-event="${escapeHtml(segment.event.id)}" title="${escapeHtml(segment.event.title || '')}">${segment.showTitle ? escapeHtml(segment.event.title || '') : ''}</span>`;
       }).join('')}</span>` : '';
       return `<button type="button" class="calendar-day${day.inMonth ? '' : ' outside'}${day.key === todayKey ? ' today' : ''}${day.key === view.selectedDay ? ' selected' : ''}" data-calendar-day="${day.key}" aria-label="${day.key}">
         <span class="calendar-day-number">${day.date.getDate()}</span>
