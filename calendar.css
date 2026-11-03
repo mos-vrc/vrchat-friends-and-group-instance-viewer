@@ -62,7 +62,15 @@
 .calendar-seg.join-r { border-right-width: 0; }
 .calendar-more { font-size: 10px; height: 19px; line-height: 19px; color: var(--muted, #8999ae); }
 .calendar-below { margin-top: 14px; }
-.calendar-day-list { display: flex; flex-direction: column; gap: 6px; }
+/* Fixed height with its own scrolling: the page height must not depend
+   on how many events the selected day has, otherwise switching from a
+   busy day to an empty day shrinks the content and the browser clamps
+   the scroll position, shifting the whole calendar up. */
+.calendar-day-list {
+  display: flex; flex-direction: column; gap: 6px;
+  height: 144px; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-gutter: stable; padding-right: 4px;
+}
 .calendar-day-list-title { font-size: 13px; margin: 2px 0; }
 .calendar-day-event {
   display: flex; gap: 10px; align-items: baseline; text-align: left;
