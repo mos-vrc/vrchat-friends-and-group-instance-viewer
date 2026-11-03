@@ -913,16 +913,22 @@ function setCalendarView() {
 async function loadCalendarMonth({ ifNeeded = false } = {}) {
   if (!state.user || calendarView.loading) return;
   const view = calendarView, repo = repository;
-  const generation = state.loadGeneration, account = state.user.id;
+  const account = state.user.id;
   const token = (view.token += 1);
   const monthKey = calendarMonthKeyOf(view.cursor);
   if (ifNeeded && view.ready && view.accountId === account && view.monthKey === monthKey) { render(); return; }
-  const current = () => view === calendarView && token === view.token && generation === state.loadGeneration
+  // The calendar is independent of the main friend/instance load cycle, so
+  // its validity guard deliberately excludes state.loadGeneration: the main
+  // cycle bumps that counter on its own refreshes and would silently abandon
+  // in-flight month fetches (events never applied, loading never cleared).
+  const current = () => view === calendarView && token === view.token
     && state.user?.id === account && repo === repository;
   view.loading = true; view.error = null;
   render();
   try {
-    const dateIso = new Date(view.cursor.getFullYear(), view.cursor.getMonth(), 1).toISOString();
+    // Ask for the month via its middle (15th, midday UTC) so the API lands
+    // in the intended month no matter which timezone it reads the date in.
+    const dateIso = new Date(Date.UTC(view.cursor.getFullYear(), view.cursor.getMonth(), 15, 12)).toISOString();
     const { events, partial } = await repo.fetchCalendarMonth(dateIso);
     if (!current()) return;
     view.events = events; view.partial = partial; view.ready = true;
@@ -933,7 +939,10 @@ async function loadCalendarMonth({ ifNeeded = false } = {}) {
     if (error?.status === 401) { handleSessionExpired(); return; }
     view.error = error;
   } finally {
-    if (current()) { view.loading = false; if (state.viewMode === VIEW_MODES.CALENDAR) render(); }
+    if (token === view.token) {
+      view.loading = false;
+      if (state.viewMode === VIEW_MODES.CALENDAR) render();
+    }
   }
 }
 

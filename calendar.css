@@ -14,7 +14,7 @@
 .calendar-day:focus-visible, .calendar-event-row:focus-visible {
   outline: var(--control-focus-outline, 2px solid var(--focus-ring, #5ce0ec)); outline-offset: 2px;
 }
-.calendar-status { font-size: 12px; margin-bottom: 8px; color: var(--muted, #8999ae); }
+.calendar-status { font-size: 12px; margin-bottom: 8px; min-height: 18px; color: var(--muted, #8999ae); }
 .calendar-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 4px; }
 .calendar-week-head { margin-bottom: 2px; }
 .calendar-weekday { font-size: 11px; text-align: center; padding: 2px 0; color: var(--muted, #8999ae); }

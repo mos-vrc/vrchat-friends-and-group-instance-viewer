@@ -131,7 +131,7 @@ export function renderCalendarMonth({ view, locale }) {
       <button type="button" class="calendar-nav" data-calendar-nav="next" aria-label="next">›</button>
       <button type="button" class="calendar-today" data-calendar-nav="today">${escapeHtml(t('今日'))}</button>
     </div>
-    ${status ? `<div class="calendar-status" role="status">${escapeHtml(status)}</div>` : ''}
+    <div class="calendar-status" role="status">${status ? escapeHtml(status) : ''}</div>
     <div class="calendar-week calendar-week-head">${weekdayNames.map((name) => `<span class="calendar-weekday">${escapeHtml(name)}</span>`).join('')}</div>
     ${weeks}
     ${dayList}
