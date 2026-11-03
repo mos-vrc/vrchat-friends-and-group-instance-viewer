@@ -3205,6 +3205,11 @@ elements.calendarButton?.addEventListener('click', setCalendarView);
 elements.calendarPopup?.addEventListener('click', (event) => {
   if (event.target.closest('[data-calendar-popup-close]')) closeCalendarEventPopup();
 });
+document.addEventListener('click', (event) => {
+  if (!calendarView.selectedEventId) return;
+  if (event.target.closest('#calendarPopup') || event.target.closest('[data-calendar-event]')) return;
+  closeCalendarEventPopup();
+});
 
 elements.notificationsButton?.addEventListener('click',()=>setNotificationPanelOpen(elements.notificationPanel.classList.contains('hidden')));
 elements.notificationPanel.addEventListener('click',onNotificationClick);

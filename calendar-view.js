@@ -99,61 +99,64 @@ export function calendarIsRecurring(event) {
   return Boolean(event?.seriesId) || event?.occurrenceKind === 'series' || event?.occurrenceKind === 'occurrence';
 }
 
-const MAX_BAR_LANES = 3;
+const MAX_LANES = 4;
 
-// Split one week's events into spanning bars and per-day chips. A bar is
-// rendered as one segment inside each day cell it touches (segments bleed
-// into the neighbouring cell so they read as one continuous bar, like the
-// official calendar), which keeps every segment anchored to its real day
-// cell instead of relying on overlay positioning.
+// Plan one week the way the official calendar does: every event — single
+// day or spanning — competes for the same horizontal lanes, packed by
+// start day and then start time. Each day cell then renders one row per
+// lane (the event's segment, or an empty placeholder), so all events in
+// the week share the same rows and the same height. Spanning events are
+// drawn as one segment per touched day cell; segments bleed into the
+// neighbouring cell so they read as one continuous bar, anchored to
+// their real day cells instead of overlay positioning.
 function planWeek(week, events) {
   const weekStartKey = week[0].key;
-  const bars = [];
-  const chipsByDay = new Map(week.map(day => [day.key, []]));
+  const items = [];
   for (const event of events) {
     const { startKey, endKey } = calendarEventSpan(event);
     if (!startKey) continue;
     const startIdx = dayIndexBetween(weekStartKey, startKey);
     const endIdx = dayIndexBetween(weekStartKey, endKey);
     if (endIdx < 0 || startIdx > 6) continue;
-    const from = Math.max(0, startIdx), to = Math.min(6, endIdx);
-    if (to > from || startIdx < 0) {
-      bars.push({ event, from, to, cutLeft: startIdx < 0, cutRight: endIdx > 6 });
-    } else chipsByDay.get(week[startIdx].key)?.push(event);
+    items.push({
+      event,
+      from: Math.max(0, startIdx),
+      to: Math.min(6, endIdx),
+      cutLeft: startIdx < 0,
+      cutRight: endIdx > 6,
+      lane: -1,
+    });
   }
-  bars.sort((a, b) => a.from - b.from || (b.to - b.from) - (a.to - a.from));
+  items.sort((a, b) => a.from - b.from || String(a.event.startsAt).localeCompare(String(b.event.startsAt)));
   const laneEnds = [];
-  for (const bar of bars) {
-    let lane = laneEnds.findIndex(end => end < bar.from);
+  const overflowByDay = new Map(week.map(day => [day.key, 0]));
+  for (const item of items) {
+    let lane = laneEnds.findIndex(end => end < item.from);
     if (lane === -1) lane = laneEnds.length;
-    if (lane >= MAX_BAR_LANES) {
-      // No free lane: fall back to a chip on the first visible day.
-      chipsByDay.get(week[bar.from].key)?.push(bar.event);
-      bar.lane = -1;
+    if (lane >= MAX_LANES) {
+      const key = week[item.from].key;
+      overflowByDay.set(key, (overflowByDay.get(key) || 0) + 1);
       continue;
     }
-    laneEnds[lane] = bar.to;
-    bar.lane = lane;
+    laneEnds[lane] = item.to;
+    item.lane = lane;
   }
   const segmentsByDay = new Map(week.map(day => [day.key, []]));
-  for (const bar of bars) {
-    if (bar.lane < 0) continue;
-    for (let col = bar.from; col <= bar.to; col += 1) {
+  for (const item of items) {
+    if (item.lane < 0) continue;
+    for (let col = item.from; col <= item.to; col += 1) {
       segmentsByDay.get(week[col].key)?.push({
-        event: bar.event,
-        lane: bar.lane,
-        isStart: col === bar.from && !bar.cutLeft,
-        isEnd: col === bar.to && !bar.cutRight,
-        joinLeft: col > bar.from || bar.cutLeft,
-        joinRight: col < bar.to || bar.cutRight,
-        showTitle: col === bar.from,
+        event: item.event,
+        lane: item.lane,
+        isStart: col === item.from && !item.cutLeft,
+        isEnd: col === item.to && !item.cutRight,
+        joinLeft: col > item.from || item.cutLeft,
+        joinRight: col < item.to || item.cutRight,
+        showTitle: col === item.from,
       });
     }
   }
-  for (const chips of chipsByDay.values()) {
-    chips.sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt)));
-  }
-  return { segmentsByDay, chipsByDay, laneCount: Math.min(laneEnds.length, MAX_BAR_LANES) };
+  return { segmentsByDay, overflowByDay, laneCount: Math.min(laneEnds.length, MAX_LANES) };
 }
 
 export function renderCalendarMonth({ view, locale }) {
@@ -168,22 +171,18 @@ export function renderCalendarMonth({ view, locale }) {
     : (view.ready && !view.events.length) ? t('この月のイベントはありません。')
     : '';
   const weeksHtml = weeks.map(week => {
-    const { segmentsByDay, chipsByDay, laneCount } = planWeek(week, view.events);
+    const { segmentsByDay, overflowByDay, laneCount } = planWeek(week, view.events);
     const cells = week.map(day => {
-      const chips = chipsByDay.get(day.key) || [];
-      const shown = chips.slice(0, 3);
-      const more = chips.length - shown.length;
       const segments = segmentsByDay.get(day.key) || [];
+      const overflow = overflowByDay.get(day.key) || 0;
       const lanesHtml = laneCount ? `<span class="calendar-lanes">${[...Array(laneCount)].map((_, lane) => {
         const segment = segments.find(row => row.lane === lane);
         if (!segment) return '<span class="calendar-lane-empty"></span>';
         return `<span class="calendar-seg${segment.isStart ? ' start' : ''}${segment.isEnd ? ' end' : ''}${segment.joinLeft ? ' join-l' : ''}${segment.joinRight ? ' join-r' : ''}" data-calendar-event="${escapeHtml(segment.event.id)}" title="${escapeHtml(segment.event.title || '')}">${segment.showTitle ? escapeHtml(segment.event.title || '') : ''}</span>`;
-      }).join('')}</span>` : '';
+      }).join('')}${overflow > 0 ? `<span class="calendar-more">+${overflow}</span>` : ''}</span>` : '';
       return `<button type="button" class="calendar-day${day.inMonth ? '' : ' outside'}${day.key === todayKey ? ' today' : ''}${day.key === view.selectedDay ? ' selected' : ''}" data-calendar-day="${day.key}" aria-label="${day.key}">
         <span class="calendar-day-number">${day.date.getDate()}</span>
         ${lanesHtml}
-        <span class="calendar-day-chips">${shown.map(event =>
-          `<span class="calendar-chip" data-calendar-event="${escapeHtml(event.id)}" title="${escapeHtml(event.title || '')}">${escapeHtml(event.title || '')}</span>`).join('')}${more > 0 ? `<span class="calendar-more">+${more}</span>` : ''}</span>
       </button>`;
     }).join('');
     return `<div class="calendar-week">${cells}</div>`;
@@ -228,9 +227,6 @@ export function renderCalendarEventDetail({ event, group, detailImageUrl, locale
   const dateText = Number.isNaN(start.getTime()) ? ''
     : new Intl.DateTimeFormat(locale || undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(start);
   const metaLine = `${calendarIsRecurring(event) ? '↻ ' : ''}${dateText} | ${calendarAccessLabel(event.accessType)}`;
-  const interested = [];
-  if (event.interestedUserCount > 0) interested.push(`${t('興味あり')} ${event.interestedUserCount}`);
-  if (event.interestedFriendCount > 0) interested.push(`${t('フレンド')} ${event.interestedFriendCount}`);
   return `<section class="calendar-detail" aria-label="${escapeHtml(t('イベント詳細'))}">
     <div class="calendar-detail-media">
       ${detailImageUrl ? `<img data-image-src="${escapeHtml(detailImageUrl)}" alt="">` : ''}
@@ -242,7 +238,6 @@ export function renderCalendarEventDetail({ event, group, detailImageUrl, locale
       <div class="calendar-detail-group">${group?.iconUrl ? `<img data-image-src="${escapeHtml(group.iconUrl)}" alt="">` : ''}<span>${escapeHtml(group?.name || t('グループ'))}</span></div>
       <div class="calendar-detail-meta">${escapeHtml(metaLine)}</div>
       ${event.description ? `<p class="calendar-detail-description">${escapeHtml(event.description)}</p>` : ''}
-      ${interested.length ? `<div class="calendar-detail-interested">${escapeHtml(interested.join(' ・ '))}</div>` : ''}
       <a class="calendar-detail-view" href="${escapeHtml(buildCalendarEventPageUrl(event))}" target="_blank" rel="noopener noreferrer">View</a>
     </div>
   </section>`;
