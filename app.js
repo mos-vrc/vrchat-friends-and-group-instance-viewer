@@ -7,7 +7,7 @@ import { IconFrameCatalog, FrameAnimations, framedAvatar } from "./icon-frames.j
 import { NotificationLocal, canPinNotification, MEMO_MAX_LENGTH } from "./notification-local.js";
 import { elapsedUpdateLabel } from "./update-time.js";
 import { renderNotificationList } from "./notification-view.js";
-import { renderCalendarMonth, renderCalendarEventPopup } from "./calendar-view.js";
+import { renderCalendarMonth, renderCalendarDayList, renderCalendarEventDetail, calendarEventDayKey } from "./calendar-view.js";
 import { summarizeGroupInstances, diagnosticLog } from "./diagnostics.js";
 import { refreshIsBlocked } from "./refresh-policy.js";
 import { NotificationStore, replySlot, REPLY_MAX_LENGTH, bulkNotificationAction, userId as notificationUserId } from "./notifications.js";
@@ -64,7 +64,7 @@ const elements = {
   reloadButton: document.getElementById('reloadButton'),
   recentButton: document.getElementById('recentButton'),
   calendarButton: document.getElementById('calendarButton'),
-  calendarPopup: document.getElementById('calendarPopup'),
+
   notificationsButton: document.getElementById('notificationsButton'),
   notificationCount: document.getElementById('notificationCount'),
   notificationPanel: document.getElementById('notificationPanel'),
@@ -958,37 +958,32 @@ async function prefetchCalendarGroups(view, current) {
     try {
       const group = await repository.api.fetchGroup(id);
       if (!current()) return;
-      if (group?.id) { view.groups.set(id, { name: group.name || '', iconUrl: group.iconUrl || '' }); changed = true; }
+      if (group?.id) { view.groups.set(id, { name: group.name || '', iconUrl: group.iconUrl || '', imageUrl: group.imageUrl || group.bannerUrl || '' }); changed = true; }
     } catch { /* keep the fallback label */ } finally { view.groupPending.delete(id); }
   }
   if (changed && current() && state.viewMode === VIEW_MODES.CALENDAR) render({ resetScroll: false });
 }
 
-function renderCalendarPopup() {
-  const panel = elements.calendarPopup;
-  if (!panel) return;
-  const event = state.viewMode === VIEW_MODES.CALENDAR
-    ? calendarView.events.find((row) => row.id === calendarView.selectedEventId)
-    : null;
-  if (!event) {
-    if (calendarView.selectedEventId && state.viewMode !== VIEW_MODES.CALENDAR) calendarView.selectedEventId = '';
-    panel.classList.add('hidden');
-    patchMarkup(panel, '');
-    return;
-  }
-  patchMarkup(panel, renderCalendarEventPopup({
+function renderCalendarBelow() {
+  const view = calendarView;
+  const event = view.events.find((row) => row.id === view.selectedEventId) || null;
+  const group = event ? view.groups.get(event.ownerId) || null : null;
+  // Events without their own image fall back to the group's image, then
+  // its icon, mirroring the official event detail.
+  const rawImage = event ? (event.imageUrl || group?.imageUrl || group?.iconUrl || '') : '';
+  const detail = event ? renderCalendarEventDetail({
     event,
-    group: calendarView.groups.get(event.ownerId) || null,
-    displayImageUrl,
+    group: group ? { name: group.name, iconUrl: group.iconUrl ? displayImageUrl(group.iconUrl, 'avatar') : '' } : null,
+    detailImageUrl: rawImage ? displayImageUrl(rawImage, 'world') : '',
     locale: getLocale(),
-  }));
-  panel.classList.remove('hidden');
+  }) : '';
+  return `<div class="calendar-below">${renderCalendarDayList({ view, locale: getLocale() })}${detail}</div>`;
 }
 
 function closeCalendarEventPopup() {
   if (!calendarView.selectedEventId) return;
   calendarView.selectedEventId = '';
-  renderCalendarPopup();
+  render({ resetScroll: false });
 }
 
 function onCalendarViewClick(event) {
@@ -1006,8 +1001,16 @@ function onCalendarViewClick(event) {
     render({ resetScroll: true }); void loadCalendarMonth();
     return;
   }
+  if (event.target.closest('[data-calendar-popup-close]')) { closeCalendarEventPopup(); return; }
   const eventRow = event.target.closest('[data-calendar-event]');
-  if (eventRow) { calendarView.selectedEventId = eventRow.dataset.calendarEvent; renderCalendarPopup(); return; }
+  if (eventRow) {
+    calendarView.selectedEventId = eventRow.dataset.calendarEvent;
+    const picked = calendarView.events.find((row) => row.id === calendarView.selectedEventId);
+    if (picked) calendarView.selectedDay = calendarEventDayKey(picked);
+    render({ resetScroll: false });
+    elements.list.querySelector('.calendar-below')?.scrollIntoView({ block: 'nearest' });
+    return;
+  }
   const day = event.target.closest('[data-calendar-day]');
   if (day) {
     calendarView.selectedDay = day.dataset.calendarDay;
@@ -2390,7 +2393,6 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   updateReloadButton();
   resumeAutoRefresh();
   renderNotificationPanel();
-  renderCalendarPopup();
   hideFriendInstancePreview({ immediate: true });
   closeFavoriteMenu();
   const friendScroll = elements.friendList?.scrollTop || 0;
@@ -2408,7 +2410,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   if (state.viewMode === VIEW_MODES.RECENT) {
     patchMarkup(elements.list, `${renderRecentWorlds()}${credit}`);
   } else if (state.viewMode === VIEW_MODES.CALENDAR) {
-    patchMarkup(elements.list, `${renderCalendarMonth({ view: calendarView, locale: getLocale() })}${credit}`);
+    patchMarkup(elements.list, `${renderCalendarMonth({ view: calendarView, locale: getLocale() })}${renderCalendarBelow()}${credit}`);
   } else if (state.viewMode === VIEW_MODES.FRIENDS) {
     patchMarkup(elements.list, `${renderFriendLocationView()}${credit}`);
   } else {
@@ -3171,9 +3173,7 @@ elements.copyDiagnosticButton?.addEventListener('click',copyDiagnostics);
 elements.copyStatusDiagnostic?.addEventListener('click',copyDiagnostics);
 elements.recentButton?.addEventListener('click', setRecentView);
 elements.calendarButton?.addEventListener('click', setCalendarView);
-elements.calendarPopup?.addEventListener('click', (event) => {
-  if (event.target.closest('[data-calendar-popup-close]') || event.target === elements.calendarPopup) closeCalendarEventPopup();
-});
+
 elements.notificationsButton?.addEventListener('click',()=>setNotificationPanelOpen(elements.notificationPanel.classList.contains('hidden')));
 elements.notificationPanel.addEventListener('click',onNotificationClick);
 elements.notificationPanel.addEventListener('scroll',scheduleNotificationProfiles,{passive:true,capture:true});
