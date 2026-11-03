@@ -1,5 +1,10 @@
 .calendar-button svg { width: 19px; height: 19px; }
 
+/* Reserve the scrollbar gutter while the calendar is shown, so opening
+   the day list (which makes the content scrollable) never changes the
+   calendar's width. */
+#list.calendar-view { scrollbar-gutter: stable; }
+
 .calendar-view { padding: 4px 2px 10px; }
 .calendar-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .calendar-title { font-size: 16px; font-weight: 700; }
