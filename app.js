@@ -7,7 +7,7 @@ import { IconFrameCatalog, FrameAnimations, framedAvatar } from "./icon-frames.j
 import { NotificationLocal, canPinNotification, MEMO_MAX_LENGTH } from "./notification-local.js";
 import { elapsedUpdateLabel } from "./update-time.js";
 import { renderNotificationList } from "./notification-view.js";
-import { renderCalendarMonth, renderCalendarDayList, renderCalendarEventDetail, calendarEventDayKey } from "./calendar-view.js";
+import { renderCalendarMonth, renderCalendarDayList, renderCalendarEventDetail, renderCalendarPersonalEditor, calendarEventDayKey, calendarDayKey } from "./calendar-view.js";
 import { summarizeGroupInstances, diagnosticLog } from "./diagnostics.js";
 import { refreshIsBlocked } from "./refresh-policy.js";
 import { NotificationStore, replySlot, REPLY_MAX_LENGTH, bulkNotificationAction, userId as notificationUserId } from "./notifications.js";
@@ -64,6 +64,7 @@ const elements = {
   reloadButton: document.getElementById('reloadButton'),
   recentButton: document.getElementById('recentButton'),
   calendarButton: document.getElementById('calendarButton'),
+  calendarTodayDot: document.getElementById('calendarTodayDot'),
   calendarPopup: document.getElementById('calendarPopup'),
 
   notificationsButton: document.getElementById('notificationsButton'),
@@ -91,6 +92,7 @@ let calendarView = {
   accountId: '', monthKey: '', events: [], groups: new Map(), groupPending: new Set(),
   loading: false, error: null, partial: false, ready: false, token: 0,
   selectedDay: '', selectedEventId: '', popupAnchor: null,
+  personalEvents: [], editor: null, editorKey: '',
 };
 
 const VIEW_MODES = Object.freeze({
@@ -965,8 +967,84 @@ async function prefetchCalendarGroups(view, current) {
   if (changed && current() && state.viewMode === VIEW_MODES.CALENDAR) render({ resetScroll: false });
 }
 
+// Personal schedule: the add-on's own local entries, stored only in this
+// browser (localStorage) and never sent to VRChat or anywhere else.
+const PERSONAL_EVENTS_KEY = 'vrc_viewer_personal_events';
+
+function loadPersonalEvents() {
+  const stored = uiStorage.get(PERSONAL_EVENTS_KEY, []);
+  calendarView.personalEvents = Array.isArray(stored)
+    ? stored.filter((entry) => entry && typeof entry.id === 'string'
+      && typeof entry.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(entry.date))
+      .map((entry) => ({
+        id: entry.id, date: entry.date,
+        start: typeof entry.start === 'string' ? entry.start : '',
+        end: typeof entry.end === 'string' ? entry.end : '',
+        title: typeof entry.title === 'string' ? entry.title : '',
+        detail: typeof entry.detail === 'string' ? entry.detail : '',
+      }))
+    : [];
+}
+
+function persistPersonalEvents() {
+  uiStorage.set(PERSONAL_EVENTS_KEY, calendarView.personalEvents);
+}
+
+// The calendar toolbar button carries a dot on days that have a personal
+// entry today, mirroring the notification memo dot.
+function updateCalendarTodayDot() {
+  const dot = elements.calendarTodayDot;
+  if (!dot) return;
+  const todayKey = calendarDayKey(new Date());
+  dot.hidden = !calendarView.personalEvents.some((entry) => entry.date === todayKey);
+}
+
+function openPersonalEditor({ id = '', dateKey = '', anchor = null } = {}) {
+  calendarView.editor = { id, dateKey };
+  calendarView.selectedEventId = '';
+  calendarView.popupAnchor = anchor;
+  const entry = id ? calendarView.personalEvents.find((row) => row.id === id) : null;
+  if (entry) calendarView.selectedDay = entry.date;
+  else if (dateKey) calendarView.selectedDay = dateKey;
+  render({ resetScroll: false });
+}
+
+function savePersonalEditor() {
+  const panel = elements.calendarPopup;
+  const editor = calendarView.editor;
+  if (!panel || !editor) return;
+  const date = panel.querySelector('#personalDate')?.value || '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+  const entry = {
+    id: editor.id || `pe_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
+    date,
+    start: panel.querySelector('#personalStart')?.value || '',
+    end: panel.querySelector('#personalEnd')?.value || '',
+    title: (panel.querySelector('#personalTitle')?.value || '').trim(),
+    detail: (panel.querySelector('#personalDetail')?.value || '').trim(),
+  };
+  const index = calendarView.personalEvents.findIndex((row) => row.id === entry.id);
+  if (index >= 0) calendarView.personalEvents[index] = entry;
+  else calendarView.personalEvents.push(entry);
+  persistPersonalEvents();
+  calendarView.editor = null;
+  calendarView.selectedDay = entry.date;
+  updateCalendarTodayDot();
+  render({ resetScroll: false });
+}
+
+function deletePersonalEditorEntry() {
+  const editor = calendarView.editor;
+  if (!editor?.id) return;
+  calendarView.personalEvents = calendarView.personalEvents.filter((row) => row.id !== editor.id);
+  persistPersonalEvents();
+  calendarView.editor = null;
+  updateCalendarTodayDot();
+  render({ resetScroll: false });
+}
+
 function renderCalendarBelow() {
-  return `<div class="calendar-below">${renderCalendarDayList({ view: calendarView, locale: getLocale() })}</div>`;
+  return `<div class="calendar-below">${renderCalendarDayList({ view: calendarView, locale: getLocale() })}<p class="calendar-hint">${escapeHtml(t('日をダブルクリックすると自分の予定を追加できます。'))}</p></div>`;
 }
 
 // The event detail floats next to the click that opened it, like the
@@ -976,10 +1054,36 @@ function renderCalendarPopup() {
   const panel = elements.calendarPopup;
   if (!panel) return;
   const view = calendarView;
+  if (state.viewMode === VIEW_MODES.CALENDAR && view.editor) {
+    const entry = view.editor.id
+      ? view.personalEvents.find((row) => row.id === view.editor.id) || null
+      : null;
+    // Re-rendering the form from stored values would clobber what the user
+    // is typing whenever an unrelated render lands (e.g. the month fetch
+    // completing), so only rebuild it when the editor target changes.
+    const editorKey = `${view.editor.id}|${view.editor.dateKey}`;
+    if (view.editorKey !== editorKey) {
+      patchMarkup(panel, renderCalendarPersonalEditor({ entry, dateKey: view.editor.dateKey }));
+      view.editorKey = editorKey;
+    }
+    panel.classList.remove('hidden');
+    const anchor = view.popupAnchor;
+    if (anchor) {
+      const width = 320;
+      const height = panel.offsetHeight || 380;
+      panel.style.left = `${Math.max(8, Math.min(anchor.x + 14, window.innerWidth - width - 8))}px`;
+      panel.style.top = `${Math.max(8, Math.min(anchor.y + 10, window.innerHeight - height - 8))}px`;
+      panel.style.transform = 'none';
+    } else {
+      panel.style.left = ''; panel.style.top = ''; panel.style.transform = '';
+    }
+    return;
+  }
   const event = state.viewMode === VIEW_MODES.CALENDAR
     ? view.events.find((row) => row.id === view.selectedEventId) || null
     : null;
   if (!event) {
+    view.editorKey = '';
     panel.classList.add('hidden');
     patchMarkup(panel, '');
     return;
@@ -1008,8 +1112,9 @@ function renderCalendarPopup() {
 }
 
 function closeCalendarEventPopup() {
-  if (!calendarView.selectedEventId) return;
+  if (!calendarView.selectedEventId && !calendarView.editor) return;
   calendarView.selectedEventId = '';
+  calendarView.editor = null;
   calendarView.popupAnchor = null;
   render({ resetScroll: false });
 }
@@ -1019,7 +1124,7 @@ function onCalendarViewClick(event) {
   const nav = event.target.closest('[data-calendar-nav]');
   if (nav) {
     const view = calendarView;
-    view.token += 1; view.loading = false; view.selectedEventId = '';
+    view.token += 1; view.loading = false; view.selectedEventId = ''; view.editor = null;
     if (nav.dataset.calendarNav === 'today') {
       view.cursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     } else {
@@ -1030,6 +1135,14 @@ function onCalendarViewClick(event) {
     return;
   }
   if (event.target.closest('[data-calendar-popup-close]')) { closeCalendarEventPopup(); return; }
+  const personalRow = event.target.closest('[data-calendar-personal]');
+  if (personalRow) {
+    openPersonalEditor({
+      id: personalRow.dataset.calendarPersonal,
+      anchor: { x: event.clientX || 0, y: event.clientY || 0 },
+    });
+    return;
+  }
   const eventRow = event.target.closest('[data-calendar-event]');
   if (eventRow) {
     calendarView.selectedEventId = eventRow.dataset.calendarEvent;
@@ -3161,6 +3274,15 @@ elements.list?.addEventListener('keydown',event=>{
 });
 elements.list?.addEventListener('click', onWorldViewClick);
 elements.list?.addEventListener('click', onCalendarViewClick);
+elements.list?.addEventListener('dblclick', (event) => {
+  if (state.viewMode !== VIEW_MODES.CALENDAR) return;
+  const day = event.target.closest('[data-calendar-day]');
+  if (!day) return;
+  openPersonalEditor({
+    dateKey: day.dataset.calendarDay,
+    anchor: { x: event.clientX || 0, y: event.clientY || 0 },
+  });
+});
 elements.friendInstancePreview?.addEventListener('click', onWorldViewClick);
 elements.list?.addEventListener('submit', event=>{void saveWorldListName(event)});
 elements.list?.addEventListener('input', event=>{if(event.target.matches('.world-list-name') && worldView.editor && !worldView.editor.saving){worldView.editor.draft=event.target.value;event.target.closest('form').querySelector('.world-name-count').textContent=`${event.target.value.length} / 20`;}});
@@ -3209,11 +3331,13 @@ elements.copyStatusDiagnostic?.addEventListener('click',copyDiagnostics);
 elements.recentButton?.addEventListener('click', setRecentView);
 elements.calendarButton?.addEventListener('click', setCalendarView);
 elements.calendarPopup?.addEventListener('click', (event) => {
-  if (event.target.closest('[data-calendar-popup-close]')) closeCalendarEventPopup();
+  if (event.target.closest('[data-calendar-popup-close]')) { closeCalendarEventPopup(); return; }
+  if (event.target.closest('[data-personal-save]')) { savePersonalEditor(); return; }
+  if (event.target.closest('[data-personal-delete]')) deletePersonalEditorEntry();
 });
 document.addEventListener('click', (event) => {
-  if (!calendarView.selectedEventId) return;
-  if (event.target.closest('#calendarPopup') || event.target.closest('[data-calendar-event]')) return;
+  if (!calendarView.selectedEventId && !calendarView.editor) return;
+  if (event.target.closest('#calendarPopup') || event.target.closest('[data-calendar-event]') || event.target.closest('[data-calendar-personal]')) return;
   closeCalendarEventPopup();
 });
 
@@ -3353,6 +3477,8 @@ document.getElementById('language').addEventListener('change', event => {
   positionSettingsPanel();
 });
 restoreUiPreferences();
+loadPersonalEvents();
+updateCalendarTodayDot();
 persistUiPreferences();
 applyMainSortOptions();
 updateTabButtons();

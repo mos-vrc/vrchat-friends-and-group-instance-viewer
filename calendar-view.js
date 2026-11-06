@@ -65,6 +65,24 @@ function dayIndexBetween(fromKey, toKey) {
   return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000);
 }
 
+// Personal entries are the add-on's own local schedule (never synced with
+// VRChat). They are stored as { id, date: 'YYYY-MM-DD', start: 'HH:MM'|'',
+// end: 'HH:MM'|'', title, detail } and converted to the calendar-event
+// shape so the grid planning and day grouping can treat them uniformly.
+// Missing times mean all-day: the span covers 00:00–23:59 of the date.
+export function personalEventAsCalendarEvent(entry) {
+  const date = typeof entry?.date === 'string' ? entry.date : '';
+  const start = typeof entry?.start === 'string' && entry.start ? entry.start : '00:00';
+  const end = typeof entry?.end === 'string' && entry.end ? entry.end : '23:59';
+  const startLocal = new Date(`${date}T${start}:00`);
+  const endLocal = new Date(`${date}T${end}:00`);
+  return {
+    id: entry?.id, personal: true, title: entry?.title || '',
+    startsAt: Number.isNaN(startLocal.getTime()) ? '' : startLocal.toISOString(),
+    endsAt: Number.isNaN(endLocal.getTime()) ? '' : endLocal.toISOString(),
+  };
+}
+
 export function groupCalendarEventsByDay(events) {
   const byDay = new Map();
   for (const event of events || []) {
@@ -170,15 +188,17 @@ export function renderCalendarMonth({ view, locale }) {
     : view.partial ? t('一部取得失敗')
     : (view.ready && !view.events.length) ? t('この月のイベントはありません。')
     : '';
+  const allEvents = [...(view.events || []),
+    ...(view.personalEvents || []).map(personalEventAsCalendarEvent)];
   const weeksHtml = weeks.map(week => {
-    const { segmentsByDay, overflowByDay, laneCount } = planWeek(week, view.events);
+    const { segmentsByDay, overflowByDay, laneCount } = planWeek(week, allEvents);
     const cells = week.map(day => {
       const segments = segmentsByDay.get(day.key) || [];
       const overflow = overflowByDay.get(day.key) || 0;
       const lanesHtml = laneCount ? `<span class="calendar-lanes">${[...Array(laneCount)].map((_, lane) => {
         const segment = segments.find(row => row.lane === lane);
         if (!segment) return '<span class="calendar-lane-empty"></span>';
-        return `<span class="calendar-seg${segment.isStart ? ' start' : ''}${segment.isEnd ? ' end' : ''}${segment.joinLeft ? ' join-l' : ''}${segment.joinRight ? ' join-r' : ''}" data-calendar-event="${escapeHtml(segment.event.id)}" title="${escapeHtml(segment.event.title || '')}">${segment.showTitle ? escapeHtml(segment.event.title || '') : ''}</span>`;
+        return `<span class="calendar-seg${segment.isStart ? ' start' : ''}${segment.isEnd ? ' end' : ''}${segment.joinLeft ? ' join-l' : ''}${segment.joinRight ? ' join-r' : ''}${segment.event.personal ? ' personal' : ''}" ${segment.event.personal ? `data-calendar-personal="${escapeHtml(segment.event.id)}"` : `data-calendar-event="${escapeHtml(segment.event.id)}"`} title="${escapeHtml(segment.event.title || '')}">${segment.showTitle ? escapeHtml(segment.event.title || '') : ''}</span>`;
       }).join('')}${overflow > 0 ? `<span class="calendar-more">+${overflow}</span>` : ''}</span>` : '';
       return `<button type="button" class="calendar-day${day.inMonth ? '' : ' outside'}${day.key === todayKey ? ' today' : ''}${day.key === view.selectedDay ? ' selected' : ''}" data-calendar-day="${day.key}" aria-label="${day.key}">
         <span class="calendar-day-number">${day.date.getDate()}</span>
@@ -202,19 +222,34 @@ export function renderCalendarMonth({ view, locale }) {
 
 export function renderCalendarDayList({ view, locale }) {
   if (!view.selectedDay) return '';
-  const dayEvents = groupCalendarEventsByDay(view.events).get(view.selectedDay) || [];
   const timeFormat = new Intl.DateTimeFormat(locale || undefined, { hour: 'numeric', minute: '2-digit' });
-  const rows = dayEvents.map(event => {
-    const start = new Date(event.startsAt), end = new Date(event.endsAt);
-    const range = Number.isNaN(start.getTime()) ? ''
-      : `${timeFormat.format(start)}${Number.isNaN(end.getTime()) ? '' : ` – ${timeFormat.format(end)}`}`;
-    const group = view.groups.get(event.ownerId);
-    return `<button type="button" class="calendar-day-event${event.id === view.selectedEventId ? ' selected' : ''}" data-calendar-event="${escapeHtml(event.id)}">
+  const vrcRows = (groupCalendarEventsByDay(view.events).get(view.selectedDay) || [])
+    .map(event => ({ sortKey: String(event.startsAt || ''), event }));
+  const personalRows = (view.personalEvents || [])
+    .filter(entry => entry?.date === view.selectedDay)
+    .map(entry => ({ sortKey: String(personalEventAsCalendarEvent(entry).startsAt || ''), entry }));
+  const rows = [...vrcRows, ...personalRows]
+    .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    .map(({ event, entry }) => {
+      if (entry) {
+        const range = !entry.start && !entry.end ? t('終日')
+          : `${entry.start || ''}${entry.end ? ` – ${entry.end}` : ''}`;
+        return `<button type="button" class="calendar-day-event personal${view.editor?.id === entry.id ? ' selected' : ''}" data-calendar-personal="${escapeHtml(entry.id)}">
+      <span class="calendar-day-event-time">${escapeHtml(range)}</span>
+      <span class="calendar-day-event-title">${escapeHtml(entry.title || '')}</span>
+      <span class="calendar-day-event-meta">${escapeHtml(t('自分の予定'))}</span>
+    </button>`;
+      }
+      const start = new Date(event.startsAt), end = new Date(event.endsAt);
+      const range = Number.isNaN(start.getTime()) ? ''
+        : `${timeFormat.format(start)}${Number.isNaN(end.getTime()) ? '' : ` – ${timeFormat.format(end)}`}`;
+      const group = view.groups.get(event.ownerId);
+      return `<button type="button" class="calendar-day-event${event.id === view.selectedEventId ? ' selected' : ''}" data-calendar-event="${escapeHtml(event.id)}">
       <span class="calendar-day-event-time">${escapeHtml(range)}</span>
       <span class="calendar-day-event-title">${escapeHtml(event.title || '')}</span>
       <span class="calendar-day-event-meta">${escapeHtml(calendarCategoryLabel(event.category))}${group?.name ? ` ・ ${escapeHtml(group.name)}` : ''}</span>
     </button>`;
-  }).join('');
+    }).join('');
   return `<section class="calendar-day-list" aria-label="${escapeHtml(view.selectedDay)}">
     <h3 class="calendar-day-list-title">${escapeHtml(view.selectedDay)}</h3>
     ${rows || `<p class="calendar-empty">${escapeHtml(t('この日のイベントはありません。'))}</p>`}
@@ -239,6 +274,33 @@ export function renderCalendarEventDetail({ event, group, detailImageUrl, locale
       <div class="calendar-detail-meta">${escapeHtml(metaLine)}</div>
       ${event.description ? `<p class="calendar-detail-description">${escapeHtml(event.description)}</p>` : ''}
       <a class="calendar-detail-view" href="${escapeHtml(buildCalendarEventPageUrl(event))}" target="_blank" rel="noopener noreferrer">View</a>
+    </div>
+  </section>`;
+}
+
+// Editor for one personal entry, shown in the same floating panel as the
+// event detail. entry is null for a new entry on dateKey. app.js reads the
+// field values back out of the panel when Save/Delete is clicked.
+export function renderCalendarPersonalEditor({ entry, dateKey }) {
+  const isNew = !entry?.id;
+  const heading = t(isNew ? '予定を追加' : '予定を編集');
+  return `<section class="calendar-detail calendar-personal-editor" aria-label="${escapeHtml(heading)}">
+    <div class="calendar-personal-head">
+      <h3 class="calendar-detail-title">${escapeHtml(heading)}</h3>
+      <button type="button" class="calendar-detail-close" data-calendar-popup-close aria-label="${escapeHtml(t('閉じる'))}">×</button>
+    </div>
+    <div class="calendar-personal-form">
+      <label>${escapeHtml(t('日付'))}<input type="date" id="personalDate" value="${escapeHtml(entry?.date || dateKey || '')}"></label>
+      <div class="calendar-personal-times">
+        <label>${escapeHtml(t('開始'))}<input type="time" id="personalStart" value="${escapeHtml(entry?.start || '')}"></label>
+        <label>${escapeHtml(t('終了'))}<input type="time" id="personalEnd" value="${escapeHtml(entry?.end || '')}"></label>
+      </div>
+      <label>${escapeHtml(t('タイトル'))}<input type="text" id="personalTitle" value="${escapeHtml(entry?.title || '')}" maxlength="100"></label>
+      <label>${escapeHtml(t('詳細'))}<textarea id="personalDetail" rows="3" maxlength="500">${escapeHtml(entry?.detail || '')}</textarea></label>
+      <div class="calendar-personal-actions">
+        ${isNew ? '' : `<button type="button" class="calendar-personal-delete" data-personal-delete>${escapeHtml(t('削除'))}</button>`}
+        <button type="button" class="calendar-personal-save" data-personal-save>${escapeHtml(t('保存'))}</button>
+      </div>
     </div>
   </section>`;
 }

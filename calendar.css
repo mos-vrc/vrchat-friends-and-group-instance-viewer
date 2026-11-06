@@ -1,4 +1,58 @@
 .calendar-button svg { width: 19px; height: 19px; }
+.calendar-button { position: relative; }
+
+/* Personal schedule colour: a warm terracotta fallback, then the theme's
+   own accent hue rotated ~150° so the personal entries sit in a clearly
+   different family from the (accent-tinted) VRChat events in every theme. */
+body {
+  --personal-accent: #d97757;
+  --personal-accent: oklch(from var(--accent, #58a6ff) l c calc(h + 150));
+}
+.calendar-today-dot {
+  position: absolute; right: -2px; top: -2px; width: 9px; height: 9px;
+  border-radius: 50%; background: var(--personal-accent); pointer-events: none;
+}
+.calendar-today-dot[hidden] { display: none; }
+.calendar-seg.personal {
+  background: color-mix(in srgb, var(--personal-accent) 30%, transparent);
+  border-color: color-mix(in srgb, var(--personal-accent) 55%, transparent);
+}
+.calendar-day-event.personal {
+  border-left: 3px solid var(--personal-accent);
+  background: color-mix(in srgb, var(--personal-accent) 10%, transparent);
+}
+.calendar-hint { font-size: 11px; color: var(--muted, #8999ae); margin: 8px 2px 0; }
+
+.calendar-personal-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 12px 12px 0 16px;
+}
+.calendar-personal-head .calendar-detail-close { position: static; flex-shrink: 0; }
+.calendar-personal-form { display: flex; flex-direction: column; gap: 9px; padding: 10px 16px 16px; }
+.calendar-personal-form label {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 12px; color: var(--muted, #8999ae);
+}
+.calendar-personal-form input, .calendar-personal-form textarea {
+  font: inherit; font-size: 13px; color: inherit; box-sizing: border-box; width: 100%;
+  background: var(--panel-soft, rgba(255,255,255,.05));
+  border: 1px solid var(--line, rgba(255,255,255,.09)); border-radius: 6px;
+  padding: 5px 7px;
+}
+.calendar-personal-times { display: flex; gap: 8px; }
+.calendar-personal-times label { flex: 1; min-width: 0; }
+.calendar-personal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.calendar-personal-save, .calendar-personal-delete {
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  border-radius: 7px; padding: 6px 14px;
+  border: 1px solid var(--line-strong, rgba(255,255,255,.2));
+  background: var(--panel-soft, rgba(255,255,255,.05)); color: inherit;
+}
+.calendar-personal-save {
+  background: color-mix(in srgb, var(--personal-accent) 32%, transparent);
+  border-color: color-mix(in srgb, var(--personal-accent) 55%, transparent);
+}
+.calendar-personal-delete { color: #e88; margin-right: auto; }
 
 /* Reserve the scrollbar gutter while the calendar is shown, so opening
    the day list (which makes the content scrollable) never changes the
