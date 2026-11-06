@@ -2885,6 +2885,11 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     state.loading = false;
     render();
     if (state.viewMode === VIEW_MODES.RECENT) void loadWorldView({ force: reason !== 'initial' });
+    // The calendar only fetches from its own entry points (toolbar button,
+    // month navigation, refresh). When the popup reopens with the calendar
+    // view restored from preferences, this dispatch is what loads the month;
+    // without it the restored calendar stayed empty until the user clicked.
+    if (state.viewMode === VIEW_MODES.CALENDAR) void loadCalendarMonth({ ifNeeded: true });
     void loadNotifications(reason!=='initial');
     updateLoadedAtLabel();
     setStatus('');
