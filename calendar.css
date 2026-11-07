@@ -1,16 +1,17 @@
 .calendar-button svg { width: 19px; height: 19px; }
 .calendar-button { position: relative; }
 
-/* Personal schedule colour: a warm terracotta fallback, then the theme's
-   own accent hue rotated ~150° so the personal entries sit in a clearly
-   different family from the (accent-tinted) VRChat events in every theme. */
-body {
-  --personal-accent: #d97757;
-  --personal-accent: oklch(from var(--accent, #58a6ff) l c calc(h + 150));
-}
+/* Personal schedule colour: the theme's own accent (blue-based in every
+   theme) so entries blend with the theme instead of shouting, except in
+   the sand theme whose accent is brown — there a muted brick red that
+   fits the warm palette is used instead. */
+body { --personal-accent: var(--accent, #58a6ff); }
+body[data-theme="sand"] { --personal-accent: #b4483c; }
+/* Same fixed green as the notification/floating memo dots (#23834c);
+   those marks do not change with the theme, and neither does this one. */
 .calendar-today-dot {
   position: absolute; right: -2px; top: -2px; width: 9px; height: 9px;
-  border-radius: 50%; background: var(--personal-accent); pointer-events: none;
+  border-radius: 50%; background: #23834c; pointer-events: none;
 }
 .calendar-today-dot[hidden] { display: none; }
 .calendar-seg.personal {
@@ -39,6 +40,7 @@ body {
   border: 1px solid var(--line, rgba(255,255,255,.09)); border-radius: 6px;
   padding: 5px 7px;
 }
+.calendar-personal-form textarea { resize: none; }
 .calendar-personal-times { display: flex; gap: 8px; }
 .calendar-personal-times label { flex: 1; min-width: 0; }
 .calendar-personal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
