@@ -338,6 +338,11 @@ export function wirePersonalEditorTimeAdvance(root) {
   });
   root.addEventListener('input', (event) => {
     if (event.target?.id !== 'personalStart') return;
+    // Typing is governed by the digit counter alone: Chrome completes the
+    // value early (typing 210 already yields 21:00 while the minute segment
+    // still waits for its second digit), so an input event mid-typing must
+    // never advance. This path is only for non-typing completion (paste).
+    if (digits > 0) return;
     if (!completeWhenFocused && isComplete(event.target.value)) advance();
   });
 }
