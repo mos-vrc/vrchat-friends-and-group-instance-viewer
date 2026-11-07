@@ -284,6 +284,10 @@ export function renderCalendarEventDetail({ event, group, detailImageUrl, locale
 export function renderCalendarPersonalEditor({ entry, dateKey }) {
   const isNew = !entry?.id;
   const heading = t(isNew ? '予定を追加' : '予定を編集');
+  const timeGroup = (group, label, value) => {
+    const [h = '', m = ''] = String(value || '').split(':');
+    return `<label>${escapeHtml(t(label))}<span class="calendar-personal-time" data-time-group="${group}"><input type="text" class="time-seg" data-time-seg inputmode="numeric" autocomplete="off" placeholder="--" value="${escapeHtml(h)}"><span class="time-sep" aria-hidden="true">:</span><input type="text" class="time-seg" data-time-seg inputmode="numeric" autocomplete="off" placeholder="--" value="${escapeHtml(m)}"></span></label>`;
+  };
   return `<section class="calendar-detail calendar-personal-editor" aria-label="${escapeHtml(heading)}">
     <div class="calendar-personal-head">
       <h3 class="calendar-detail-title">${escapeHtml(heading)}</h3>
@@ -292,8 +296,8 @@ export function renderCalendarPersonalEditor({ entry, dateKey }) {
     <div class="calendar-personal-form">
       <label>${escapeHtml(t('日付'))}<input type="date" id="personalDate" value="${escapeHtml(entry?.date || dateKey || '')}"></label>
       <div class="calendar-personal-times">
-        <label>${escapeHtml(t('開始'))}<input type="time" id="personalStart" value="${escapeHtml(entry?.start || '')}"></label>
-        <label>${escapeHtml(t('終了'))}<input type="time" id="personalEnd" value="${escapeHtml(entry?.end || '')}"></label>
+        ${timeGroup('start', '開始', entry?.start || '')}
+        ${timeGroup('end', '終了', entry?.end || '')}
       </div>
       <label>${escapeHtml(t('タイトル'))}<input type="text" id="personalTitle" value="${escapeHtml(entry?.title || '')}" maxlength="100"></label>
       <label>${escapeHtml(t('詳細'))}<textarea id="personalDetail" rows="3" maxlength="500">${escapeHtml(entry?.detail || '')}</textarea></label>
@@ -305,44 +309,94 @@ export function renderCalendarPersonalEditor({ entry, dateKey }) {
   </section>`;
 }
 
-// Wires the personal editor's start->end time auto-advance onto a container
-// that outlives the editor markup (the popup element itself). Two signals,
-// both scoped to one focus session of the start field:
-//  - digit keys: typing a full HHMM (4 digits) moves focus to the end field,
-//    while a short correction (e.g. retyping just the hour) never does;
-//  - the field's own input event: if the value becomes complete while the
-//    field was incomplete when focused (paste, picker-less completion),
-//    advance too. A field that was already complete when focused never
-//    advances via input events, so corrections stay put.
-export function wirePersonalEditorTimeAdvance(root) {
-  if (!root || root.dataset?.timeAdvanceWired) return;
-  if (root.dataset) root.dataset.timeAdvanceWired = '1';
-  let digits = 0;
-  let completeWhenFocused = false;
-  const isComplete = (value) => /^\d{2}:\d{2}$/.test(value || '');
-  const advance = () => {
-    digits = 0;
-    const end = root.querySelector('#personalEnd');
-    if (end) { end.focus(); end.select?.(); }
+// Reads one segment group (start or end) back into an 'HH:MM' string.
+// Both segments empty means "no time" (an all-day entry); a half-filled
+// group is zero-padded on the missing side.
+export function personalTimeGroupValue(group) {
+  if (!group) return '';
+  const segs = group.querySelectorAll('[data-time-seg]');
+  const h = (segs[0]?.value || '').replace(/\D/g, '');
+  const m = (segs[1]?.value || '').replace(/\D/g, '');
+  if (!h && !m) return '';
+  return `${(h || '0').padStart(2, '0')}:${(m || '0').padStart(2, '0')}`;
+}
+
+// Segmented time entry, following the mainstream time-field design (React
+// Aria TimeField, Bit AutoAdvance, Chrome's own segment editor): hour and
+// minute are separate segments, and focus advances only when the segment
+// being edited cannot take another digit — after two digits, or after one
+// digit no second digit could extend (3-9 for hours, 6-9 for minutes,
+// coerced to 0X). There is no global keystroke counting, so corrections
+// behave: focusing a segment selects its content, typing restarts just that
+// segment, Backspace in an empty segment steps back one segment, and a
+// pasted run of digits ("2200", "21:05") distributes across the segments.
+export function wirePersonalEditorTimeSegments(root) {
+  if (!root || root.dataset?.timeSegmentsWired) return;
+  if (root.dataset) root.dataset.timeSegmentsWired = '1';
+  const segments = () => [...root.querySelectorAll('[data-time-seg]')];
+  const segInfo = (seg) => {
+    const group = seg.closest('[data-time-group]');
+    const inGroup = group ? [...group.querySelectorAll('[data-time-seg]')] : [seg];
+    const isMinute = inGroup.indexOf(seg) === 1;
+    return { isMinute, max: isMinute ? 59 : 23, firstMax: isMinute ? 5 : 2 };
   };
+  const focusSeg = (seg) => { if (seg) { seg.focus(); seg.select?.(); } };
+  const stepSeg = (seg, delta) => { const all = segments(); return all[all.indexOf(seg) + delta] || null; };
+  // Writes the leading digits of `digits` into seg; returns digits consumed.
+  const setSegment = (seg, digits) => {
+    const { max, firstMax } = segInfo(seg);
+    if (!digits) { seg.value = ''; return 0; }
+    const first = Number(digits[0]);
+    if (first > firstMax) { seg.value = `0${first}`; return 1; }
+    if (digits.length === 1) { seg.value = digits; return 1; }
+    if (Number(digits.slice(0, 2)) > max) { seg.value = digits[0]; return 1; }
+    seg.value = digits.slice(0, 2); return 2;
+  };
+  const isComplete = (seg) => seg.value.length === 2;
+
   root.addEventListener('focusin', (event) => {
-    if (event.target?.id !== 'personalStart') return;
-    digits = 0;
-    completeWhenFocused = isComplete(event.target.value);
+    if (event.target?.matches?.('[data-time-seg]')) event.target.select?.();
   });
-  root.addEventListener('keyup', (event) => {
-    if (event.target?.id !== 'personalStart') return;
-    if (!/^\d$/.test(event.key)) return;
-    digits += 1;
-    if (digits >= 4) advance();
+  root.addEventListener('focusout', (event) => {
+    const seg = event.target;
+    if (!seg?.matches?.('[data-time-seg]')) return;
+    if (seg.value.length === 1) seg.value = seg.value.padStart(2, '0');
   });
   root.addEventListener('input', (event) => {
-    if (event.target?.id !== 'personalStart') return;
-    // Typing is governed by the digit counter alone: Chrome completes the
-    // value early (typing 210 already yields 21:00 while the minute segment
-    // still waits for its second digit), so an input event mid-typing must
-    // never advance. This path is only for non-typing completion (paste).
-    if (digits > 0) return;
-    if (!completeWhenFocused && isComplete(event.target.value)) advance();
+    const seg = event.target;
+    if (!seg?.matches?.('[data-time-seg]')) return;
+    const digits = seg.value.replace(/\D/g, '');
+    if (digits.length <= 2) {
+      // Ordinary typing: a digit the segment rejects (e.g. the 9 in hour 29)
+      // is dropped, never handed on to the next segment.
+      setSegment(seg, digits);
+      if (isComplete(seg)) focusSeg(stepSeg(seg, 1) || seg);
+      return;
+    }
+    // A longer run (paste, or typing into a filled segment): fill this
+    // segment, then distribute the rest across the following segments.
+    let current = seg;
+    let rest = digits;
+    while (current && rest) {
+      const consumed = setSegment(current, rest);
+      if (!consumed) break;
+      rest = rest.slice(consumed);
+      current = stepSeg(current, 1);
+    }
+    focusSeg(current || seg);
+  });
+  root.addEventListener('keydown', (event) => {
+    const seg = event.target;
+    if (!seg?.matches?.('[data-time-seg]')) return;
+    if (event.key === 'Backspace' && !seg.value) {
+      event.preventDefault();
+      focusSeg(stepSeg(seg, -1));
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      const target = stepSeg(seg, event.key === 'ArrowLeft' ? -1 : 1);
+      if (target) { event.preventDefault(); focusSeg(target); }
+    } else if (event.key === ':' && !segInfo(seg).isMinute) {
+      const target = stepSeg(seg, 1);
+      if (target) { event.preventDefault(); focusSeg(target); }
+    }
   });
 }

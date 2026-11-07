@@ -44,7 +44,8 @@ body[data-theme="sand"] { --personal-accent: #b4483c; }
 /* Field focus follows the app's existing form conventions: the search
    inputs' border/shadow treatment on :focus, and the notification memo's
    plain muted outline on :focus-visible — never the browser's bright
-   defaults. The datetime segment highlight gets the same muted family. */
+   defaults. The time segment group takes the same treatment via
+   :focus-within, with the active segment tinted in the same muted family. */
 .calendar-personal-form input:focus, .calendar-personal-form textarea:focus {
   border-color: var(--input-focus-border, rgba(84, 222, 235, .62));
   box-shadow: var(--input-focus-shadow,
@@ -56,15 +57,27 @@ body[data-theme="sand"] { --personal-accent: #b4483c; }
   outline: 1px solid color-mix(in srgb, var(--focus-ring, var(--accent)) 40%, var(--line));
   outline-offset: 1px;
 }
-.calendar-personal-form input::-webkit-datetime-edit-year-field:focus,
-.calendar-personal-form input::-webkit-datetime-edit-month-field:focus,
-.calendar-personal-form input::-webkit-datetime-edit-day-field:focus,
-.calendar-personal-form input::-webkit-datetime-edit-hour-field:focus,
-.calendar-personal-form input::-webkit-datetime-edit-minute-field:focus,
-.calendar-personal-form input::-webkit-datetime-edit-ampm-field:focus {
+.calendar-personal-time {
+  display: inline-flex; align-items: center; gap: 2px;
+  box-sizing: border-box; width: 100%;
+  background: var(--panel-soft, rgba(255,255,255,.05));
+  border: 1px solid var(--line, rgba(255,255,255,.09)); border-radius: 6px;
+  padding: 3px 7px;
+}
+.calendar-personal-time:focus-within {
+  border-color: var(--input-focus-border, rgba(84, 222, 235, .62));
+  box-shadow: var(--input-focus-shadow,
+    0 0 0 2px rgba(76, 211, 229, .09),
+    0 0 16px rgba(87, 180, 225, .08));
+}
+.calendar-personal-time .time-sep { color: var(--muted); }
+.calendar-personal-form .time-seg {
+  width: 2.4em; padding: 2px 0; text-align: center;
+  border: none; background: transparent; box-shadow: none; border-radius: 3px;
+}
+.calendar-personal-form .time-seg:focus, .calendar-personal-form .time-seg:focus-visible {
+  border: none; box-shadow: none; outline: none;
   background: color-mix(in srgb, var(--focus-ring, var(--accent)) 22%, transparent);
-  color: inherit;
-  border-radius: 2px;
 }
 .calendar-personal-times { display: flex; gap: 8px; }
 .calendar-personal-times label { flex: 1; min-width: 0; }

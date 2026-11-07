@@ -7,7 +7,7 @@ import { IconFrameCatalog, FrameAnimations, framedAvatar } from "./icon-frames.j
 import { NotificationLocal, canPinNotification, MEMO_MAX_LENGTH } from "./notification-local.js";
 import { elapsedUpdateLabel } from "./update-time.js";
 import { renderNotificationList } from "./notification-view.js";
-import { renderCalendarMonth, renderCalendarDayList, renderCalendarEventDetail, renderCalendarPersonalEditor, wirePersonalEditorTimeAdvance, calendarEventDayKey, calendarDayKey } from "./calendar-view.js";
+import { renderCalendarMonth, renderCalendarDayList, renderCalendarEventDetail, renderCalendarPersonalEditor, wirePersonalEditorTimeSegments, personalTimeGroupValue, calendarEventDayKey, calendarDayKey } from "./calendar-view.js";
 import { summarizeGroupInstances, diagnosticLog } from "./diagnostics.js";
 import { refreshIsBlocked } from "./refresh-policy.js";
 import { NotificationStore, replySlot, REPLY_MAX_LENGTH, bulkNotificationAction, userId as notificationUserId } from "./notifications.js";
@@ -1018,8 +1018,8 @@ function savePersonalEditor() {
   const entry = {
     id: editor.id || `pe_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
     date,
-    start: panel.querySelector('#personalStart')?.value || '',
-    end: panel.querySelector('#personalEnd')?.value || '',
+    start: personalTimeGroupValue(panel.querySelector('[data-time-group="start"]')),
+    end: personalTimeGroupValue(panel.querySelector('[data-time-group="end"]')),
     title: (panel.querySelector('#personalTitle')?.value || '').trim(),
     detail: (panel.querySelector('#personalDetail')?.value || '').trim(),
   };
@@ -3335,9 +3335,9 @@ elements.calendarPopup?.addEventListener('click', (event) => {
   if (event.target.closest('[data-personal-save]')) { savePersonalEditor(); return; }
   if (event.target.closest('[data-personal-delete]')) deletePersonalEditorEntry();
 });
-// Start->end time auto-advance for the personal editor (digit-count based;
-// see wirePersonalEditorTimeAdvance in calendar-view.js).
-wirePersonalEditorTimeAdvance(elements.calendarPopup);
+// Segmented time entry for the personal editor (see
+// wirePersonalEditorTimeSegments in calendar-view.js).
+wirePersonalEditorTimeSegments(elements.calendarPopup);
 document.addEventListener('click', (event) => {
   if (!calendarView.selectedEventId && !calendarView.editor) return;
   if (event.target.closest('#calendarPopup') || event.target.closest('[data-calendar-event]') || event.target.closest('[data-calendar-personal]')) return;
