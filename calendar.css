@@ -59,7 +59,7 @@ body[data-theme="sand"] { --personal-accent: #b4483c; }
 }
 .calendar-personal-time {
   display: inline-flex; align-items: center; gap: 2px;
-  box-sizing: border-box; width: 100%;
+  box-sizing: border-box; width: fit-content; max-width: 100%;
   background: var(--panel-soft, rgba(255,255,255,.05));
   border: 1px solid var(--line, rgba(255,255,255,.09)); border-radius: 6px;
   padding: 3px 7px;
@@ -234,7 +234,7 @@ body[data-theme="sand"] { --personal-accent: #b4483c; }
    app's popover styling. */
 .calendar-personal-time { position: relative; }
 .time-picker-button {
-  margin-left: auto; flex: none;
+  margin-left: 2px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
   width: 24px; height: 24px; padding: 0;
   border: none; border-radius: 4px; background: transparent;

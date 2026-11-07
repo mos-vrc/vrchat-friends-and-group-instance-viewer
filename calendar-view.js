@@ -404,6 +404,7 @@ export function wirePersonalEditorTimeSegments(root) {
   root.addEventListener('click', (event) => {
     const pickerButton = event.target.closest?.('[data-time-picker]');
     if (pickerButton) {
+      event.stopPropagation();
       const group = pickerButton.closest('[data-time-group]');
       if (group?.querySelector('.time-picker-list')) closePickers();
       else if (group) openPicker(group);
@@ -411,6 +412,12 @@ export function wirePersonalEditorTimeSegments(root) {
     }
     const item = event.target.closest?.('[data-time-value]');
     if (item) {
+      // Fully handled here. Propagation must stop: the pick removes the
+      // clicked item from the DOM, and if the same click then reaches
+      // handlers that test the target's ancestors (the app's outside-click
+      // close), the detached target looks like an outside click and the
+      // whole editor closes.
+      event.stopPropagation();
       const group = item.closest('[data-time-group]');
       const segs = group?.querySelectorAll('[data-time-seg]');
       const [h, m] = (item.dataset.timeValue || '').split(':');
