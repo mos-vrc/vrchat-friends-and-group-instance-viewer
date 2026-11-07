@@ -7,7 +7,7 @@ import { IconFrameCatalog, FrameAnimations, framedAvatar } from "./icon-frames.j
 import { NotificationLocal, canPinNotification, MEMO_MAX_LENGTH } from "./notification-local.js";
 import { elapsedUpdateLabel } from "./update-time.js";
 import { renderNotificationList } from "./notification-view.js";
-import { renderCalendarMonth, renderCalendarDayList, renderCalendarEventDetail, renderCalendarPersonalEditor, calendarEventDayKey, calendarDayKey } from "./calendar-view.js";
+import { renderCalendarMonth, renderCalendarDayList, renderCalendarEventDetail, renderCalendarPersonalEditor, wirePersonalEditorTimeAdvance, calendarEventDayKey, calendarDayKey } from "./calendar-view.js";
 import { summarizeGroupInstances, diagnosticLog } from "./diagnostics.js";
 import { refreshIsBlocked } from "./refresh-policy.js";
 import { NotificationStore, replySlot, REPLY_MAX_LENGTH, bulkNotificationAction, userId as notificationUserId } from "./notifications.js";
@@ -3335,14 +3335,9 @@ elements.calendarPopup?.addEventListener('click', (event) => {
   if (event.target.closest('[data-personal-save]')) { savePersonalEditor(); return; }
   if (event.target.closest('[data-personal-delete]')) deletePersonalEditorEntry();
 });
-elements.calendarPopup?.addEventListener('input', (event) => {
-  // Once the start time is fully typed (HH:MM), move straight to the end
-  // time so a range like 2200-2300 can be keyed in one continuous flow.
-  if (event.target?.id !== 'personalStart') return;
-  if (!/^\d{2}:\d{2}$/.test(event.target.value)) return;
-  const end = elements.calendarPopup.querySelector('#personalEnd');
-  if (end) { end.focus(); end.select?.(); }
-});
+// Start->end time auto-advance for the personal editor (digit-count based;
+// see wirePersonalEditorTimeAdvance in calendar-view.js).
+wirePersonalEditorTimeAdvance(elements.calendarPopup);
 document.addEventListener('click', (event) => {
   if (!calendarView.selectedEventId && !calendarView.editor) return;
   if (event.target.closest('#calendarPopup') || event.target.closest('[data-calendar-event]') || event.target.closest('[data-calendar-personal]')) return;

@@ -304,3 +304,26 @@ export function renderCalendarPersonalEditor({ entry, dateKey }) {
     </div>
   </section>`;
 }
+
+// Wires the personal editor's start->end time auto-advance onto a container
+// that outlives the editor markup (the popup element itself). Advancing is
+// driven by counting digit keys within one focus session of the start field:
+// typing a full HHMM moves focus to the end field, while a short correction
+// (e.g. retyping just the hour) never yanks focus away.
+export function wirePersonalEditorTimeAdvance(root) {
+  if (!root || root.dataset?.timeAdvanceWired) return;
+  if (root.dataset) root.dataset.timeAdvanceWired = '1';
+  let digits = 0;
+  root.addEventListener('focusin', (event) => {
+    if (event.target?.id === 'personalStart') digits = 0;
+  });
+  root.addEventListener('keyup', (event) => {
+    if (event.target?.id !== 'personalStart') return;
+    if (!/^\d$/.test(event.key)) return;
+    digits += 1;
+    if (digits < 4) return;
+    digits = 0;
+    const end = root.querySelector('#personalEnd');
+    if (end) { end.focus(); end.select?.(); }
+  });
+}
