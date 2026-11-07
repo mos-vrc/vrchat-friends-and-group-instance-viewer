@@ -306,24 +306,38 @@ export function renderCalendarPersonalEditor({ entry, dateKey }) {
 }
 
 // Wires the personal editor's start->end time auto-advance onto a container
-// that outlives the editor markup (the popup element itself). Advancing is
-// driven by counting digit keys within one focus session of the start field:
-// typing a full HHMM moves focus to the end field, while a short correction
-// (e.g. retyping just the hour) never yanks focus away.
+// that outlives the editor markup (the popup element itself). Two signals,
+// both scoped to one focus session of the start field:
+//  - digit keys: typing a full HHMM (4 digits) moves focus to the end field,
+//    while a short correction (e.g. retyping just the hour) never does;
+//  - the field's own input event: if the value becomes complete while the
+//    field was incomplete when focused (paste, picker-less completion),
+//    advance too. A field that was already complete when focused never
+//    advances via input events, so corrections stay put.
 export function wirePersonalEditorTimeAdvance(root) {
   if (!root || root.dataset?.timeAdvanceWired) return;
   if (root.dataset) root.dataset.timeAdvanceWired = '1';
   let digits = 0;
+  let completeWhenFocused = false;
+  const isComplete = (value) => /^\d{2}:\d{2}$/.test(value || '');
+  const advance = () => {
+    digits = 0;
+    const end = root.querySelector('#personalEnd');
+    if (end) { end.focus(); end.select?.(); }
+  };
   root.addEventListener('focusin', (event) => {
-    if (event.target?.id === 'personalStart') digits = 0;
+    if (event.target?.id !== 'personalStart') return;
+    digits = 0;
+    completeWhenFocused = isComplete(event.target.value);
   });
   root.addEventListener('keyup', (event) => {
     if (event.target?.id !== 'personalStart') return;
     if (!/^\d$/.test(event.key)) return;
     digits += 1;
-    if (digits < 4) return;
-    digits = 0;
-    const end = root.querySelector('#personalEnd');
-    if (end) { end.focus(); end.select?.(); }
+    if (digits >= 4) advance();
+  });
+  root.addEventListener('input', (event) => {
+    if (event.target?.id !== 'personalStart') return;
+    if (!completeWhenFocused && isComplete(event.target.value)) advance();
   });
 }
