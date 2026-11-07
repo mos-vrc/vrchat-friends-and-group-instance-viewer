@@ -350,6 +350,7 @@ const english = Object.freeze({
   "この月のイベントはありません。": "No events this month.",
   "この日のイベントはありません。": "No events on this day.",
   "自分の予定": "Personal",
+  "時刻を選ぶ": "Choose time",
   "予定を追加": "Add personal event",
   "予定を編集": "Edit personal event",
   "日付": "Date",

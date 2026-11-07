@@ -228,3 +228,38 @@ body[data-theme="sand"] { --personal-accent: #b4483c; }
 .calendar-detail-view:hover { background: #0891b2; }
 
 .calendar-view ~ .app-credit, .calendar-below ~ .app-credit { margin-top: 10px; }
+
+/* Time picker: clock button at the group's right edge (where the native
+   picker's indicator used to sit) and a 10-minute-step dropdown in the
+   app's popover styling. */
+.calendar-personal-time { position: relative; }
+.time-picker-button {
+  margin-left: auto; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  border: none; border-radius: 4px; background: transparent;
+  color: var(--muted); cursor: pointer;
+}
+.time-picker-button:hover {
+  background: color-mix(in srgb, var(--focus-ring, var(--accent)) 14%, transparent);
+  color: var(--text);
+}
+.time-picker-list {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 40;
+  width: 116px; max-height: 176px; overflow-y: auto; padding: 4px;
+  box-sizing: border-box;
+  background: var(--panel-strong, var(--panel));
+  border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 12px 34px rgba(0,0,0,.48);
+}
+.time-picker-item {
+  display: block; width: 100%; padding: 4px 8px;
+  border: none; border-radius: 4px; background: transparent;
+  color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.time-picker-item:hover {
+  background: color-mix(in srgb, var(--focus-ring, var(--accent)) 14%, transparent);
+}
+.time-picker-item.selected {
+  background: color-mix(in srgb, var(--personal-accent) 22%, transparent);
+}

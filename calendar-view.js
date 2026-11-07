@@ -286,7 +286,7 @@ export function renderCalendarPersonalEditor({ entry, dateKey }) {
   const heading = t(isNew ? '予定を追加' : '予定を編集');
   const timeGroup = (group, label, value) => {
     const [h = '', m = ''] = String(value || '').split(':');
-    return `<label>${escapeHtml(t(label))}<span class="calendar-personal-time" data-time-group="${group}"><input type="text" class="time-seg" data-time-seg inputmode="numeric" autocomplete="off" placeholder="--" value="${escapeHtml(h)}"><span class="time-sep" aria-hidden="true">:</span><input type="text" class="time-seg" data-time-seg inputmode="numeric" autocomplete="off" placeholder="--" value="${escapeHtml(m)}"></span></label>`;
+    return `<label>${escapeHtml(t(label))}<span class="calendar-personal-time" data-time-group="${group}"><input type="text" class="time-seg" data-time-seg inputmode="numeric" autocomplete="off" placeholder="--" value="${escapeHtml(h)}"><span class="time-sep" aria-hidden="true">:</span><input type="text" class="time-seg" data-time-seg inputmode="numeric" autocomplete="off" placeholder="--" value="${escapeHtml(m)}"><button type="button" class="time-picker-button" data-time-picker tabindex="-1" aria-label="${escapeHtml(t('時刻を選ぶ'))}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button></span></label>`;
   };
   return `<section class="calendar-detail calendar-personal-editor" aria-label="${escapeHtml(heading)}">
     <div class="calendar-personal-head">
@@ -294,7 +294,7 @@ export function renderCalendarPersonalEditor({ entry, dateKey }) {
       <button type="button" class="calendar-detail-close" data-calendar-popup-close aria-label="${escapeHtml(t('閉じる'))}">×</button>
     </div>
     <div class="calendar-personal-form">
-      <label>${escapeHtml(t('日付'))}<input type="date" id="personalDate" value="${escapeHtml(entry?.date || dateKey || '')}"></label>
+      <label>${escapeHtml(t('日付'))}<input type="date" id="personalDate" max="9999-12-31" value="${escapeHtml(entry?.date || dateKey || '')}"></label>
       <div class="calendar-personal-times">
         ${timeGroup('start', '開始', entry?.start || '')}
         ${timeGroup('end', '終了', entry?.end || '')}
@@ -385,7 +385,44 @@ export function wirePersonalEditorTimeSegments(root) {
     }
     focusSeg(current || seg);
   });
+  const closePickers = () => root.querySelectorAll('.time-picker-list').forEach((list) => list.remove());
+  const openPicker = (group) => {
+    closePickers();
+    const current = personalTimeGroupValue(group);
+    const list = document.createElement('div');
+    list.className = 'time-picker-list';
+    list.setAttribute('role', 'listbox');
+    let html = '';
+    for (let mins = 0; mins < 24 * 60; mins += 10) {
+      const value = `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+      html += `<button type="button" class="time-picker-item${value === current ? ' selected' : ''}" role="option" data-time-value="${value}" aria-selected="${value === current}">${value}</button>`;
+    }
+    list.innerHTML = html;
+    group.appendChild(list);
+    (list.querySelector('.selected') || list.firstElementChild)?.scrollIntoView({ block: 'center' });
+  };
+  root.addEventListener('click', (event) => {
+    const pickerButton = event.target.closest?.('[data-time-picker]');
+    if (pickerButton) {
+      const group = pickerButton.closest('[data-time-group]');
+      if (group?.querySelector('.time-picker-list')) closePickers();
+      else if (group) openPicker(group);
+      return;
+    }
+    const item = event.target.closest?.('[data-time-value]');
+    if (item) {
+      const group = item.closest('[data-time-group]');
+      const segs = group?.querySelectorAll('[data-time-seg]');
+      const [h, m] = (item.dataset.timeValue || '').split(':');
+      if (segs?.length === 2 && h && m) { segs[0].value = h; segs[1].value = m; }
+      closePickers();
+      focusSeg(segs?.[1]);
+      return;
+    }
+    if (!event.target.closest?.('.calendar-personal-time')) closePickers();
+  });
   root.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closePickers();
     const seg = event.target;
     if (!seg?.matches?.('[data-time-seg]')) return;
     if (event.key === 'Backspace' && !seg.value) {
