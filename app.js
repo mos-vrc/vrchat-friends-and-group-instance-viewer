@@ -3335,6 +3335,14 @@ elements.calendarPopup?.addEventListener('click', (event) => {
   if (event.target.closest('[data-personal-save]')) { savePersonalEditor(); return; }
   if (event.target.closest('[data-personal-delete]')) deletePersonalEditorEntry();
 });
+elements.calendarPopup?.addEventListener('input', (event) => {
+  // Once the start time is fully typed (HH:MM), move straight to the end
+  // time so a range like 2200-2300 can be keyed in one continuous flow.
+  if (event.target?.id !== 'personalStart') return;
+  if (!/^\d{2}:\d{2}$/.test(event.target.value)) return;
+  const end = elements.calendarPopup.querySelector('#personalEnd');
+  if (end) { end.focus(); end.select?.(); }
+});
 document.addEventListener('click', (event) => {
   if (!calendarView.selectedEventId && !calendarView.editor) return;
   if (event.target.closest('#calendarPopup') || event.target.closest('[data-calendar-event]') || event.target.closest('[data-calendar-personal]')) return;

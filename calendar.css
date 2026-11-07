@@ -41,6 +41,31 @@ body[data-theme="sand"] { --personal-accent: #b4483c; }
   padding: 5px 7px;
 }
 .calendar-personal-form textarea { resize: none; }
+/* Field focus follows the app's existing form conventions: the search
+   inputs' border/shadow treatment on :focus, and the notification memo's
+   plain muted outline on :focus-visible — never the browser's bright
+   defaults. The datetime segment highlight gets the same muted family. */
+.calendar-personal-form input:focus, .calendar-personal-form textarea:focus {
+  border-color: var(--input-focus-border, rgba(84, 222, 235, .62));
+  box-shadow: var(--input-focus-shadow,
+    0 0 0 2px rgba(76, 211, 229, .09),
+    0 0 16px rgba(87, 180, 225, .08));
+  outline: none;
+}
+.calendar-personal-form :is(input, textarea):focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--focus-ring, var(--accent)) 40%, var(--line));
+  outline-offset: 1px;
+}
+.calendar-personal-form input::-webkit-datetime-edit-year-field:focus,
+.calendar-personal-form input::-webkit-datetime-edit-month-field:focus,
+.calendar-personal-form input::-webkit-datetime-edit-day-field:focus,
+.calendar-personal-form input::-webkit-datetime-edit-hour-field:focus,
+.calendar-personal-form input::-webkit-datetime-edit-minute-field:focus,
+.calendar-personal-form input::-webkit-datetime-edit-ampm-field:focus {
+  background: color-mix(in srgb, var(--focus-ring, var(--accent)) 22%, transparent);
+  color: inherit;
+  border-radius: 2px;
+}
 .calendar-personal-times { display: flex; gap: 8px; }
 .calendar-personal-times label { flex: 1; min-width: 0; }
 .calendar-personal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
@@ -138,6 +163,12 @@ body[data-theme="sand"] { --personal-accent: #b4483c; }
 .calendar-day-event.selected {
   background: rgba(130, 148, 175, .12);
   border-color: rgba(148, 168, 198, .38);
+}
+/* A personal row keeps its own tint when selected (it opens the editor);
+   the generic slate wash above must not paint over it. */
+.calendar-day-event.personal.selected {
+  background: color-mix(in srgb, var(--personal-accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--personal-accent) 55%, transparent);
 }
 .calendar-day-event-time { font-size: 12px; color: var(--muted, #8999ae); white-space: nowrap; }
 .calendar-day-event-title { font-size: 13px; font-weight: 600; }
