@@ -1,5 +1,5 @@
 // Allowlisted summaries only. Never retain API bodies, messages, IDs or URLs.
-const operations = new Set(['api', 'instance-details', 'instance-world', 'friends', 'groups', 'offline', 'worlds', 'recent', 'worldFavorites', 'notifications-load', 'notifications-bulk', 'notifications-read', 'notifications-accept', 'notifications-decline', 'notifications-hide', 'notifications-reply', 'notifications-invite', 'notifications-verify', 'notifications-messages', 'favorite-write', 'list-rename', 'invite-me', 'cache-clear', 'ui']);
+const operations = new Set(['api', 'instance-details', 'instance-world', 'friends', 'groups', 'offline', 'worlds', 'recent', 'worldFavorites', 'avatars', 'avatarFavorites', 'notifications-load', 'notifications-bulk', 'notifications-read', 'notifications-accept', 'notifications-decline', 'notifications-hide', 'notifications-reply', 'notifications-invite', 'notifications-verify', 'notifications-messages', 'favorite-write', 'list-rename', 'invite-me', 'cache-clear', 'ui']);
 const codes = new Set(['TIMEOUT', 'NETWORK_ERROR', 'READ_CANCELLED', 'RUNTIME_ERROR', 'RUNTIME_TIMEOUT', 'INVALID_URL', 'API_HEADERS_UNAVAILABLE']);
 export function diagnosticEndpoint(path) {
   // The returned value is a literal template, never a captured substring.

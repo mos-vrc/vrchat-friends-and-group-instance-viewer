@@ -240,6 +240,10 @@ export class VrchatApiClient {
     return this.fetchJson(`/worlds/${encodeURIComponent(worldId)}`);
   }
 
+  fetchAvatar(avatarId) {
+    return this.fetchJson(`/avatars/${encodeURIComponent(avatarId)}`);
+  }
+
   fetchUser(userId) {
     return this.fetchJson(`/users/${encodeURIComponent(userId)}`);
   }

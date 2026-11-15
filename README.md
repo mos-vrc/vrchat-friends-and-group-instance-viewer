@@ -1,6 +1,6 @@
 # VRChat Friends & Group Instance Viewer
 
-**Version: 1.6.10.0**
+**Version: 1.7.0.0**
 
 VRChatのフレンドの居場所、Friend / Groupインスタンス、Favoriteワールド、通知をChromeで確認できる非公式拡張機能です。VRChat Inc.が制作・承認・提供するツールではありません。
 
@@ -35,6 +35,15 @@ Chrome Web Storeからインストールし、同じChromeでVRChat公式サイ�
 - 未登録のマークは黒丸、登録済みは★1から始まるリスト番号です。内部タグと表示名を区別して操作します。
 - カードは小／中／大に対応し、常にノーマル表示です。PC／Androidの対応環境、URLコピー、ワールド名・作者を表示します。取得済みのカードを先に表示し、Favorite確認中は状態を案内します。
 - 情報取得不可のワールドはその旨とワールドIDを表示します。再登録できないワールドの移動は許可せず、解除後に復元できない場合があります。
+
+## アバター管理
+
+上部の人物アイコン（地球儀アイコンとカレンダーアイコンの間）で開きます。操作と画面構成はワールド管理と同じです。
+
+- Favoriteアバターのリストを確認し、登録・移動・解除・リスト名変更ができます。リストの数と上限はアカウントに従います（通常は1リスト、VRC+では最大6リスト、各リスト50件まで）。
+- 未登録のマークは黒丸、登録済みは★1から始まるリスト番号です。内部タグと表示名を区別して操作します。
+- カードは小／中／大に対応し、常にノーマル表示です。PC／Android／iOSの対応環境、URLコピー、アバター名・作者を表示します。取得済みのカードを先に表示し、Favorite確認中は状態を案内します。
+- 情報取得不可のアバターはその旨とアバターIDを表示します。再登録できないアバターの移動は許可せず、解除後に復元できない場合があります。
 
 ## イベントカレンダー
 
@@ -93,7 +102,7 @@ Twitter / X [@mos_vrc](https://x.com/mos_vrc)
 
 ## English
 
-An unofficial Chrome extension for VRChat friends, instances, Favorite worlds and notifications. Install from the Chrome Web Store, sign in to VRChat in the same Chrome browser, then click the extension icon. Japanese and English are supported; your saved choice takes priority over browser language. Dates use your browser time zone.
+An unofficial Chrome extension for VRChat friends, instances, Favorite worlds, Favorite avatars and notifications. Install from the Chrome Web Store, sign in to VRChat in the same Chrome browser, then click the extension icon. Japanese and English are supported; your saved choice takes priority over browser language. Dates use your browser time zone.
 
 See PRIVACY.md and SECURITY.md for data handling, VALIDATION.md for requirements and limitations, and CHANGELOG.md for release notes.
 

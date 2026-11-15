@@ -1421,6 +1421,7 @@ body[data-instance-size="large"] {--world-card-min:280px;--world-title-size:15px
 .recent-world-author {font-size:var(--world-text-size);}
 .world-copy {font-size:16px;min-width:26px;min-height:24px;}
 .recent-globe-icon {width:18px;height:18px;display:block;}
+.avatars-button svg {width:19px;height:19px;display:block;}
 .world-favorite-button.favorite-badge {width:24px;height:18px;font-size:10px;line-height:18px;border-radius:9px;}
 .world-favorite-button.favorite-badge:not(.is-favorite) {width:18px;}
 .world-favorite-button.favorite-badge.is-pending:not(.is-favorite) {background:#626b75;color:#fff;box-shadow:0 0 0 1px rgba(184,199,214,.5);}

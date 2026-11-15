@@ -1,5 +1,6 @@
 import {readFailureMessage} from "./ui-feedback.js";
 import {worldPlatforms, worldIsUnavailable} from "./world-catalog.js";
+import {avatarPlatforms, avatarIsUnavailable} from "./avatar-catalog.js";
 import {t, lt} from "./i18n.js";
 import {formatActivityDateTime, uiText} from "./ui-format.js";
 import {CONFIG, PERMISSIONS, TABS} from "./config.js";
@@ -22,11 +23,15 @@ export function createViews({
   renderFavoriteActionButton,
   renderFramedAvatar,
   renderWorldFavoriteButton,
+  renderAvatarFavoriteButton,
   state,
   getRepository,
   getWorldFavorites,
   getWorldCatalog,
-  getWorldView
+  getWorldView,
+  getAvatarFavorites,
+  getAvatarCatalog,
+  getAvatarView
 }) {
   let renderedInstanceIndex = null;
 
@@ -132,6 +137,28 @@ export function createViews({
         const placeholder=unavailable?`<div class="thumb thumb-placeholder world-unavailable"><span class="world-unavailable-icon" aria-hidden="true">⌕</span><span>World Currently<br>Unavailable</span></div>`:'<div class="thumb thumb-placeholder"></div>';
         return `<article class="recent-world-card" data-world-id="${escapeHtml(world.id)}"><div class="thumb-wrap has-world-favorite"><a class="world-page-link" href="${escapeHtml(buildWorldUrl({worldId:world.id}))}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(t('ワールドページを開く'))}">${thumb?`<img class="thumb" data-image-src="${escapeHtml(thumb)}" alt="" loading="eager" decoding="async">`:placeholder}</a>${renderWorldFavoriteButton(world.id)}<span class="world-platforms" title="${escapeHtml(t('対応環境'))}">${escapeHtml(platforms?.length?platforms.join(' / '):t('対応環境不明'))}</span><button type="button" class="world-copy" data-copy-url="${escapeHtml(buildWorldUrl({worldId:world.id}))}" title="${escapeHtml(t('ワールドURLをコピー'))}" aria-label="${escapeHtml(t('ワールドURLをコピー'))}"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="6" width="11" height="11" rx="1.5"/><path d="M13 6V3H3v10h3"/></svg></button></div>
       <div class="recent-world-name"><span title="${escapeHtml(name)}">${escapeHtml(name)}</span></div><div class="recent-world-author"><span title="${escapeHtml(unavailable||world.pending?world.id:world.authorName||t('作者不明'))}">${escapeHtml(unavailable||world.pending?world.id:world.authorName||t('作者不明'))}</span></div></article>`;
+      }).join('')}</div></section>`;
+  }
+
+  function renderFavoriteAvatars() {
+    const groups=getAvatarFavorites()?.groups||[], selected=getAvatarView().selected;
+    const group=groups.find(g=>g.key===selected);
+    const rows=group?(getAvatarFavorites()?.members(selected)||[]).map(id=>getAvatarCatalog().avatars.get(id)||{id,pending:getAvatarView().loading,loadFailed:!getAvatarView().loading&&Boolean(getAvatarView().error),unavailable:!getAvatarView().loading&&!getAvatarView().error}):[];
+    const avatarLoading=Boolean(getAvatarView().loading || getAvatarFavorites()?.inflight);
+    const notice=getAvatarView().error?readFailureMessage('avatarFavorites',getAvatarView().error)
+      :getAvatarFavorites()?.inflight?t('アバターFavoriteを確認中…')
+      :avatarLoading?'':!group?'':!rows.length?t('このリストにはアバターがありません。'):'';
+    const editor=getAvatarView().editor;
+    const edit=editor&&editor.key===selected?`<form class="world-list-editor" data-avatar-list-editor aria-busy="${editor.saving}"><label>${escapeHtml(t('リスト名'))} <input class="world-list-name" maxlength="20" value="${escapeHtml(editor.draft)}"${editor.saving?' disabled':''}></label><span class="world-name-count">${editor.draft.length} / 20</span><button type="submit"${editor.saving||editor.unknown?' disabled':''}>${escapeHtml(t('保存'))}</button><button type="button" data-avatar-edit-cancel${editor.saving?' disabled':''}>${escapeHtml(t('キャンセル'))}</button><div role="status">${escapeHtml(editor.saving?t('リスト名を保存しています…'):editor.error?t(editor.error):'')}</div></form>`:'';
+    return `<section class="recent-worlds favorite-avatars" aria-label="${escapeHtml(t('アバター管理'))}"><div class="world-tabs" role="tablist" aria-label="${escapeHtml(t('アバターリスト'))}">
+    ${groups.map((g,i)=>`<button type="button" role="tab" aria-selected="${g.key===selected}" data-avatar-tab="${escapeHtml(g.key)}" title="${escapeHtml(g.label)}">★${i+1} ${escapeHtml(g.label)} <span class="world-list-count">(${getAvatarFavorites().members(g.key).length})</span></button>`).join('')}</div>
+    ${group?`<div class="world-list-heading"><h2 title="${escapeHtml(group.label)}">${escapeHtml(group.label)}</h2><button type="button" data-avatar-edit title="${escapeHtml(t('リスト名を変更'))}" aria-label="${escapeHtml(t('リスト名を変更'))}"${state.favoriteMutationPending?' disabled':''}><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m4 13 9-9 3 3-9 9-4 1zM11 6l3 3"/></svg></button></div>`:''}${edit}
+    <div class="recent-notice" role="status">${escapeHtml(notice)}</div><div class="recent-world-grid">${rows.map(avatar=>{
+        const unavailable=avatarIsUnavailable(avatar);
+        const thumb=unavailable?'':displayImageUrl(avatar.thumbnailImageUrl||avatar.imageUrl||'','world'), platforms=unavailable?null:avatarPlatforms(avatar), name=unavailable?t('情報取得不可'):avatar.loadFailed?t('読み込み失敗'):avatar.name||t('アバター情報を取得中…');
+        const placeholder=unavailable?`<div class="thumb thumb-placeholder world-unavailable"><span class="world-unavailable-icon" aria-hidden="true">⌕</span><span>Avatar Currently<br>Unavailable</span></div>`:'<div class="thumb thumb-placeholder"></div>';
+        return `<article class="recent-world-card" data-avatar-id="${escapeHtml(avatar.id)}"><div class="thumb-wrap has-world-favorite"><a class="world-page-link" href="${escapeHtml(buildAvatarUrl({avatarId:avatar.id}))}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(t('アバターページを開く'))}">${thumb?`<img class="thumb" data-image-src="${escapeHtml(thumb)}" alt="" loading="eager" decoding="async">`:placeholder}</a>${renderAvatarFavoriteButton(avatar.id)}<span class="world-platforms" title="${escapeHtml(t('対応環境'))}">${escapeHtml(platforms?.length?platforms.join(' / '):t('対応環境不明'))}</span><button type="button" class="world-copy" data-copy-url="${escapeHtml(buildAvatarUrl({avatarId:avatar.id}))}" title="${escapeHtml(t('アバターURLをコピー'))}" aria-label="${escapeHtml(t('アバターURLをコピー'))}"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="6" width="11" height="11" rx="1.5"/><path d="M13 6V3H3v10h3"/></svg></button></div>
+      <div class="recent-world-name"><span title="${escapeHtml(name)}">${escapeHtml(name)}</span></div><div class="recent-world-author"><span title="${escapeHtml(unavailable||avatar.pending?avatar.id:avatar.authorName||t('作者不明'))}">${escapeHtml(unavailable||avatar.pending?avatar.id:avatar.authorName||t('作者不明'))}</span></div></article>`;
       }).join('')}</div></section>`;
   }
 
@@ -429,6 +456,11 @@ export function createViews({
     return `${CONFIG.WORLD_PAGE_BASE}/${encodeURIComponent(entry.worldId)}/info`;
   }
 
+  function buildAvatarUrl(entry) {
+    if (!entry?.avatarId?.startsWith('avtr_')) return '';
+    return `${CONFIG.AVATAR_PAGE_BASE}/${encodeURIComponent(entry.avatarId)}`;
+  }
+
   function buildUserProfileUrl(userId) {
     if (typeof userId !== 'string' || !/^usr_[0-9a-f-]+$/i.test(userId)) return '';
     return `https://vrchat.com/home/user/${encodeURIComponent(userId)}`;
@@ -638,6 +670,7 @@ export function createViews({
     renderFriendSidebarLocationThumbnail,
     renderFriendSidebarItem,
     renderRecentWorlds,
+    renderFavoriteAvatars,
     reverseEntryForFriend,
     friendLocationLabel,
     friendLocationSortKey,
@@ -650,6 +683,7 @@ export function createViews({
     renderUngroupedOfflineSection,
     buildInstanceLaunchUrl,
     buildWorldUrl,
+    buildAvatarUrl,
     buildUserProfileUrl,
     renderSummaryPeopleIcon,
     ownerDisplayState,

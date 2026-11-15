@@ -10,6 +10,8 @@ const readFailures = Object.freeze({
   worlds: 'ワールドを取得できませんでした。更新ボタンで再取得してください。',
   recent: '訪問ワールドを取得できませんでした。更新ボタンで再取得してください。',
   worldFavorites: 'ワールドFavoriteを取得できませんでした。更新ボタンで再取得してください。',
+  avatars: 'アバターを取得できませんでした。更新ボタンで再取得してください。',
+  avatarFavorites: 'アバターFavoriteを取得できませんでした。更新ボタンで再取得してください。',
 });
 
 export function readFailureMessage(kind, error) {

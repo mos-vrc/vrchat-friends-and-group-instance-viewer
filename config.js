@@ -12,6 +12,7 @@ export const CONFIG = Object.freeze({
   API_BASE: 'https://vrchat.com/api/1',
   LOGIN_URL: 'https://vrchat.com/login',
   WORLD_PAGE_BASE: 'https://vrchat.com/home/world',
+  AVATAR_PAGE_BASE: 'https://vrchat.com/home/avatar',
   LAUNCH_PAGE: 'https://vrchat.com/home/launch',
   MAX_FRIENDS: 5000,
   // Documented maximum for Favorites and friend lists. Pagination advances

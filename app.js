@@ -14,8 +14,10 @@ import { NotificationStore, replySlot, REPLY_MAX_LENGTH, bulkNotificationAction,
 import { ToolbarLayout } from "./toolbar-layout.js";
 import { readFailureMessage } from "./ui-feedback.js";
 import { WorldCatalog, worldIsUnavailable } from "./world-catalog.js";
+import { AvatarCatalog, avatarIsUnavailable } from "./avatar-catalog.js";
 import { fetchRecentWorlds } from "./recent-worlds.js";
 import { WorldFavorites } from "./world-favorites.js";
+import { AvatarFavorites } from "./avatar-favorites.js";
 import { SidebarResizer } from "./sidebar-resize.js";
 import { t, lt, captureStaticLabels, setLocale, getLocale, relocalize } from "./i18n.js";
 import { normalizeSearch, friendSearchText, matchesSearch, activityComparison } from "./view-query.js";
@@ -63,6 +65,7 @@ const elements = {
   autoRefresh: document.getElementById('autoRefresh'),
   reloadButton: document.getElementById('reloadButton'),
   recentButton: document.getElementById('recentButton'),
+  avatarsButton: document.getElementById('avatarsButton'),
   calendarButton: document.getElementById('calendarButton'),
   calendarTodayDot: document.getElementById('calendarTodayDot'),
   calendarPopup: document.getElementById('calendarPopup'),
@@ -87,6 +90,9 @@ let notifications=null, notificationBusy=false, notificationReply=null, notifica
 let notificationMemoComposing=false;
 let worldCatalog = new WorldCatalog();
 let worldView = { selected: 'recent', loading: false, error: null, token: 0, editor: null };
+let avatarFavorites = null;
+let avatarCatalog = new AvatarCatalog();
+let avatarView = { selected: '', loading: false, error: null, token: 0, editor: null };
 let calendarView = {
   cursor: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
   accountId: '', monthKey: '', events: [], groups: new Map(), groupPending: new Set(),
@@ -99,6 +105,7 @@ const VIEW_MODES = Object.freeze({
   INSTANCES: 'instances',
   FRIENDS: 'friends',
   RECENT: 'recent',
+  AVATARS: 'avatars',
   CALENDAR: 'calendar',
 });
 
@@ -235,6 +242,7 @@ const {
   renderFriendSidebarLocationThumbnail,
   renderFriendSidebarItem,
   renderRecentWorlds,
+  renderFavoriteAvatars,
   reverseEntryForFriend,
   friendLocationLabel,
   friendLocationSortKey,
@@ -269,17 +277,21 @@ const {
   renderFavoriteActionButton,
   renderFramedAvatar,
   renderWorldFavoriteButton,
+  renderAvatarFavoriteButton,
   state,
   getRepository: () => repository,
   getWorldFavorites: () => worldFavorites,
   getWorldCatalog: () => worldCatalog,
   getWorldView: () => worldView,
+  getAvatarFavorites: () => avatarFavorites,
+  getAvatarCatalog: () => avatarCatalog,
+  getAvatarView: () => avatarView,
 });
 
 window.addEventListener('resize', positionSettingsPanel);
 
 function automaticRefreshBlocked() {
-  return floatingMemo.isEditing() || Boolean(document.activeElement?.matches?.('[data-notification-memo]')) || refreshIsBlocked({loading:state.loading || state.instanceRetries.size>0 || worldView.loading || state.recent.loading, favoriteMutationPending:state.favoriteMutationPending, pendingInvites:state.pendingInvites.size, notificationBusy, friendEditor:state.favoriteGroupEditor, worldEditor:worldView.editor, notificationReply});
+  return floatingMemo.isEditing() || Boolean(document.activeElement?.matches?.('[data-notification-memo]')) || refreshIsBlocked({loading:state.loading || state.instanceRetries.size>0 || worldView.loading || avatarView.loading || state.recent.loading, favoriteMutationPending:state.favoriteMutationPending, pendingInvites:state.pendingInvites.size, notificationBusy, friendEditor:state.favoriteGroupEditor, worldEditor:worldView.editor || avatarView.editor, notificationReply});
 }
 function resumeAutoRefresh() { if(state.autoRefreshDueAt)scheduleAutoRefresh({preserveDue:true}); }
 function clearAutoRefreshTimer() {
@@ -543,7 +555,7 @@ function showActionToast(message, options = {}) {
 
 function applyMainSortOptions() {
   if (!elements.sort) return;
-  elements.sort.hidden = state.viewMode === VIEW_MODES.RECENT || state.viewMode === VIEW_MODES.CALENDAR;
+  elements.sort.hidden = state.viewMode === VIEW_MODES.RECENT || state.viewMode === VIEW_MODES.AVATARS || state.viewMode === VIEW_MODES.CALENDAR;
   if (state.viewMode === VIEW_MODES.FRIENDS) {
     elements.sort.innerHTML = lt`
       <option value="name">名前順</option>
@@ -568,6 +580,8 @@ function updateTabButtons() {
 
   elements.recentButton?.classList.toggle('active', state.viewMode === VIEW_MODES.RECENT);
   elements.recentButton?.setAttribute('aria-pressed', String(state.viewMode === VIEW_MODES.RECENT));
+  elements.avatarsButton?.classList.toggle('active', state.viewMode === VIEW_MODES.AVATARS);
+  elements.avatarsButton?.setAttribute('aria-pressed', String(state.viewMode === VIEW_MODES.AVATARS));
   elements.calendarButton?.classList.toggle('active', state.viewMode === VIEW_MODES.CALENDAR);
   elements.calendarButton?.setAttribute('aria-pressed', String(state.viewMode === VIEW_MODES.CALENDAR));
   document.querySelectorAll('.tab').forEach((button) => {
@@ -903,6 +917,12 @@ function setRecentView() {
   render({ resetScroll: true }); void loadWorldView();
 }
 
+function setAvatarView() {
+  state.viewMode = VIEW_MODES.AVATARS;
+  clearInstanceHighlight(); applyMainSortOptions(); persistUiPreferences();
+  render({ resetScroll: true }); void loadAvatarView();
+}
+
 function calendarMonthKeyOf(date) {
   return `${date.getFullYear()}-${date.getMonth()}`;
 }
@@ -1229,6 +1249,62 @@ function paintWorldProgress(){
   patchElement(section,template.content.firstElementChild);
   syncFavoriteMenuHighlight();updateBackToTop();
 }
+async function loadAvatarView({force=false}={}) {
+  if(!state.user || state.loading || state.favoriteMutationPending || avatarView.loading)return;
+  const view=avatarView, store=avatarFavorites, catalog=avatarCatalog, api=repository.api;
+  const generation=state.loadGeneration, account=state.user.id, token=++view.token;
+  const current=()=>view===avatarView && token===view.token && generation===state.loadGeneration && state.user?.id===account && store===avatarFavorites;
+  view.loading=true; view.error=null;
+  if(force && store)store.ready=false;
+  render();
+  try {
+    store.onProgress=()=>{if(current() && state.viewMode===VIEW_MODES.AVATARS)paintAvatarProgress()};
+    if(!store.groups.length)await store.load(force);
+    if(!current())return;
+    if(!store.groups.some(g=>g.key===view.selected))view.selected=store.groups[0]?.key||'';
+    let group=store.groups.find(g=>g.key===view.selected), groupResponse=null;
+    const foreground=()=>current() && state.viewMode===VIEW_MODES.AVATARS;
+    if(group && (force || !store.ready || Date.now()-store.updatedAt>=300000)){
+      store.ready=false;
+      try { groupResponse=await store.loadSelected(group,foreground); }
+      catch(error){
+        // An unsupported or partial selected-list response needs the complete
+        // membership snapshot. Auth/rate-limit/transient failures never fan out.
+        if(!error.selectedListUnsupported && ![400,403,404,405,501].includes(error?.status))throw error;
+        await store.load(force);
+      }
+    } else if(store)await store.load(force);
+    if(!foreground())return;
+    group=store.groups.find(g=>g.key===view.selected);
+    if(!group){view.selected='';view.loading=false;return}
+    let paintQueued=false;
+    const onProgress=()=>{
+      if(!foreground() || paintQueued)return;
+      paintQueued=true;
+      requestAnimationFrame(()=>{paintQueued=false;if(foreground())paintAvatarProgress()});
+    };
+    paintAvatarProgress();
+    await catalog.load(store.members(view.selected),api,{force,group,groupResponse,
+      current:()=>catalog===avatarCatalog && generation===state.loadGeneration && state.user?.id===account,
+      shouldContinue:foreground,onProgress});
+    if(!foreground())return;
+    // The chosen list is now browsable. Verify all memberships afterwards;
+    // Favorite editing stays disabled until that complete snapshot succeeds.
+    view.loading=false;paintAvatarProgress();
+    if(!store.ready){const task=store.load(force);paintAvatarProgress();await task}
+  }catch(error){
+    if(!current() || error?.name==='AbortError')return;
+    if(error?.status===401){handleSessionExpired();return}
+    view.error=error;
+  }finally{if(current()){view.loading=false;if(state.viewMode===VIEW_MODES.AVATARS)paintAvatarProgress();else render({resetScroll:false})}}
+}
+function paintAvatarProgress(){
+  updateReloadButton();
+  const section=elements.list.querySelector('.recent-worlds.favorite-avatars');if(!section)return;
+  const template=document.createElement('template');template.innerHTML=renderFavoriteAvatars();
+  patchElement(section,template.content.firstElementChild);
+  syncFavoriteMenuHighlight();updateBackToTop();
+}
 const notificationProfileReads=new Map(), notificationProfileFailures=new Set();
 let notificationProfileFrame=null;
 function notificationSenderProfile(row){
@@ -1421,6 +1497,40 @@ function onWorldViewClick(event) {
   if(event.target.closest('[data-world-edit-cancel]') && !worldView.editor?.saving){worldView.editor=null;render();return}
   const copy=event.target.closest('[data-copy-url]');
   if(copy){void navigator.clipboard.writeText(copy.dataset.copyUrl).then(()=>showActionToast(t('URLをコピーしました。'))).catch(()=>showActionToast(t('URLをコピーできませんでした。'),{error:true}));}
+}
+async function saveAvatarListName(event) {
+  if(!event.target.matches('[data-avatar-list-editor]'))return;
+  event.preventDefault();const editor=avatarView.editor,store=avatarFavorites,view=avatarView;
+  if(!editor || editor.saving || editor.unknown || state.loading || state.favoriteMutationPending)return;
+  const name=editor.draft.trim();
+  if(!name || name.length>20 || /[\r\n\u0000]/.test(name)){editor.error='グループ名は20文字以内で入力してください。';render();return}
+  editor.saving=true;editor.error='';state.favoriteMutationPending=true;
+  event.target.querySelectorAll('button,input').forEach(control=>{control.disabled=true});
+  actionToast.setUndoBusy(true);render({resetScroll:false});
+  showActionToast(t('リスト名を保存しています…'),{delay:0});
+  try {
+    await store.rename(editor.key,name,editor.label);
+    if(view!==avatarView || store!==avatarFavorites)return;
+    view.editor=null;showActionToast(t('リスト名を変更しました。'));
+  }catch(error){
+    if(view!==avatarView || store!==avatarFavorites)return;
+    if(error?.status===401){handleSessionExpired();return}
+    diagnosticLog.record('list-rename',error);
+    editor.unknown=Boolean(error?.outcomeUnknown);
+    editor.error=editor.unknown?'変更結果を確認できませんでした。「更新」で名前を確認してください。':error?.favoriteConflict?'Favoriteが別の画面で変更されたため、操作を中止しました。':'リスト名を変更できませんでした。';
+    showActionToast(t(editor.error),{error:true,delay:5600});
+  }finally{if(view===avatarView){editor.saving=false;state.favoriteMutationPending=false;actionToast.setUndoBusy(false);render({resetScroll:false})}}
+}
+function onAvatarViewClick(event) {
+  const tab=event.target.closest('[data-avatar-tab]');
+  if(tab && !state.favoriteMutationPending && !state.loading){avatarView.selected=tab.dataset.avatarTab;avatarView.editor=null;avatarView.token++;avatarView.loading=false;render({resetScroll:true});void loadAvatarView();elements.list.querySelector(`[data-avatar-tab="${CSS.escape(avatarView.selected)}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});return}
+  if(event.target.closest('[data-avatar-edit]') && !state.favoriteMutationPending){
+    const group=avatarFavorites?.groups.find(g=>g.key===avatarView.selected);if(!group)return;
+    avatarView.editor=avatarView.editor?null:{key:group.key,label:group.label,draft:group.label,saving:false,error:'',unknown:false};render();elements.list.querySelector('[data-avatar-list-editor] .world-list-name')?.focus();return;
+  }
+  if(event.target.closest('[data-avatar-edit-cancel]') && !avatarView.editor?.saving){avatarView.editor=null;render();return}
+  // URL copy buttons share the generic [data-copy-url] handling in
+  // onWorldViewClick; do not handle them here or the copy would run twice.
 }
 
 function setFriendView({ resetScroll = true } = {}) {
@@ -2104,7 +2214,7 @@ function setFavoriteMenuAnchor(anchor) {
 function syncFavoriteMenuHighlight() {
   const anchor=state.favoriteMenu.anchor;
   if(!anchor)return;
-  const matches=state.favoriteMenu.worldId?anchor.dataset.worldFavoriteId===state.favoriteMenu.worldId:anchor.dataset.favoriteUserId===state.favoriteMenu.userId;
+  const matches=state.favoriteMenu.worldId?anchor.dataset.worldFavoriteId===state.favoriteMenu.worldId:state.favoriteMenu.avatarId?anchor.dataset.avatarFavoriteId===state.favoriteMenu.avatarId:anchor.dataset.favoriteUserId===state.favoriteMenu.userId;
   if(!anchor.isConnected || !matches){closeFavoriteMenu();return;}
   setFavoriteMenuAnchor(anchor);
 }
@@ -2120,6 +2230,7 @@ function closeFavoriteMenu({ restoreFocus = false } = {}) {
   }
   state.favoriteMenu.userId = '';
   state.favoriteMenu.worldId = '';
+  state.favoriteMenu.avatarId = '';
   state.favoriteMenu.anchor = null;
   state.favoriteMenu.busy = false;
   state.favoriteMenu.fromFriendPreview = false;
@@ -2165,6 +2276,7 @@ function renderFavoriteMenu(userId, anchor) {
   menu.classList.remove('hidden');
   state.favoriteMenu.userId = userId;
   state.favoriteMenu.worldId = '';
+  state.favoriteMenu.avatarId = '';
   setFavoriteMenuAnchor(anchor);
   state.favoriteMenu.fromFriendPreview = Boolean(elements.friendInstancePreview?.contains(anchor));
   if (state.favoriteMenu.fromFriendPreview) clearFriendPreviewTimer('close');
@@ -2182,10 +2294,10 @@ function onFavoriteMenuMouseLeave() {
 }
 
 let favoritePositionSerial=0;
-function favoriteViewKey(){return [state.viewMode,state.tab,state.sidebarMode,worldView.selected,state.loadGeneration].join('|');}
-function captureFavoritePosition(userId='',worldId=''){
+function favoriteViewKey(){return [state.viewMode,state.tab,state.sidebarMode,worldView.selected,avatarView.selected,state.loadGeneration].join('|');}
+function captureFavoritePosition(userId='',worldId='',avatarId=''){
   const origin=state.favoriteMenu.fromFriendPreview?state.friendPreview.anchor:state.favoriteMenu.anchor;
-  const view=captureStableView([elements.friendList,elements.list],{attribute:worldId?'data-world-favorite-id':'data-favorite-user-id',value:worldId||userId,anchor:origin});
+  const view=captureStableView([elements.friendList,elements.list],{attribute:worldId?'data-world-favorite-id':avatarId?'data-avatar-favorite-id':'data-favorite-user-id',value:worldId||avatarId||userId,anchor:origin});
   view.key=favoriteViewKey();view.serial=++favoritePositionSerial;return view;
 }
 function restoreFavoritePosition(view){if(view?.key===favoriteViewKey()&&view.serial===favoritePositionSerial)restoreStableView(view);}
@@ -2314,6 +2426,18 @@ function initializeDemoWorldFavorites(instances) {
   const ids=[...new Set(instances.map(e=>e.worldId).filter(Boolean))].slice(0,2);
   ids.forEach((id,i)=>worldFavorites.records.set(id,[{id:`fvrt_demo_world_${i}`,type:'world',tags:[`worlds${i+1}`]}]));
 }
+function initializeDemoAvatarFavorites() {
+  avatarFavorites = new AvatarFavorites(repository.api);
+  avatarFavorites.ready = true; avatarFavorites.updatedAt = Date.now();
+  avatarFavorites.groups = [1,2,3].map(n=>({type:'avatar',name:`avatars${n}`,key:`avatar:avatars${n}`,label:`Favorite Avatars ${n}`}));
+  avatarView.selected = 'avatar:avatars1';
+  const demo=[
+    {id:'avtr_00000000-0000-0000-0000-000000000001',name:'Demo Avatar Alpha',authorName:'Demo Creator',thumbnailImageUrl:'',unityPackages:[{platform:'standalonewindows'},{platform:'android'}]},
+    {id:'avtr_00000000-0000-0000-0000-000000000002',name:'Demo Avatar Beta',authorName:'Demo Creator',thumbnailImageUrl:'',unityPackages:[{platform:'standalonewindows'}]},
+  ];
+  avatarCatalog.seed(demo);
+  demo.forEach((avatar,i)=>avatarFavorites.records.set(avatar.id,[{id:`fvrt_demo_avatar_${i}`,type:'avatar',tags:[`avatars${i+1}`]}]));
+}
 function renderWorldFavoriteButton(worldId) {
   if (!/^wrld_[A-Za-z0-9_-]+$/.test(worldId || '')) return '';
   const pending = !worldFavorites?.ready;
@@ -2341,7 +2465,7 @@ function renderWorldFavoriteMenu(worldId, anchor) {
       return `<button type="button" class="favorite-menu-item${active?' is-current':''}" role="menuitemradio" aria-checked="${active}" data-world-favorite-id="${escapeHtml(worldId)}" data-world-favorite-group="${escapeHtml(g.key)}"><span class="favorite-menu-check" aria-hidden="true">${active?'✓':''}</span><span class="favorite-menu-label">${escapeHtml(label)}</span></button>`;
     }).join('')) + (current.length ? `<div class="favorite-menu-separator" role="separator"></div><button type="button" class="favorite-menu-item favorite-menu-remove" data-world-favorite-id="${escapeHtml(worldId)}" data-world-favorite-remove role="menuitem"><span class="favorite-menu-check" aria-hidden="true"></span><span class="favorite-menu-label">${escapeHtml(t('Favoriteを外す'))}</span></button>`:'')
     : `<button type="button" class="favorite-menu-item" data-world-favorite-retry="${escapeHtml(worldId)}">${escapeHtml(t('ワールドFavoriteを再取得'))}</button>`);
-  state.favoriteMenu.worldId=worldId;state.favoriteMenu.userId='';setFavoriteMenuAnchor(anchor);
+  state.favoriteMenu.worldId=worldId;state.favoriteMenu.userId='';state.favoriteMenu.avatarId='';setFavoriteMenuAnchor(anchor);
   state.favoriteMenu.fromFriendPreview=Boolean(elements.friendInstancePreview?.contains(anchor));
   if(state.favoriteMenu.fromFriendPreview)clearFriendPreviewTimer('close');
   menu.classList.remove('hidden');requestAnimationFrame(()=>positionFavoriteMenu(anchor));
@@ -2437,7 +2561,131 @@ function onWorldFavoriteClick(event) {
   void changeWorldFavorite(id,group?[{type:group.type,tags:[group.name]}]:[],current);return true;
 }
 
+function renderAvatarFavoriteButton(avatarId) {
+  if (!/^avtr_[A-Za-z0-9_-]+$/.test(avatarId || '')) return '';
+  const pending = !avatarFavorites?.ready;
+  const number = avatarFavorites?.displayNumber(avatarId) || 0;
+  const active = number > 0;
+  const label = avatarFavorites?.ready
+    ? t(active ? 'アバターFavoriteを変更' : 'アバターをFavoriteに登録')
+    : t('アバターFavoriteを確認中…');
+  return `<button type="button" class="world-favorite-button avatar-favorite-button favorite-badge${pending ? ' is-pending' : ''}${active ? ' is-favorite' : ''}" data-avatar-favorite-id="${escapeHtml(avatarId)}" aria-haspopup="menu" aria-expanded="false" aria-controls="favoriteMenu" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${pending ? ' aria-busy="true"' : ''}${pending || state.favoriteMutationPending || state.loading ? ' disabled' : ''}><span aria-hidden="true">${active ? `★${number}` : pending ? '…' : ''}</span></button>`;
+}
+function unavailableFavoriteAvatar(avatarId) {
+  const avatar=avatarCatalog.avatars.get(avatarId);
+  return Boolean(avatar && avatarIsUnavailable(avatar));
+}
+function renderAvatarFavoriteMenu(avatarId, anchor) {
+  const menu=elements.favoriteMenu;
+  if (!menu || !anchor?.isConnected) return;
+  const current=avatarFavorites?.current(avatarId)||[];
+  const groups=avatarFavorites?.groups||[];
+  const unavailable=unavailableFavoriteAvatar(avatarId);
+  menu.innerHTML=(avatarFavorites?.ready
+    ? (unavailable ? `<div class="favorite-menu-world-heading" role="note">${escapeHtml(t('取得不可のアバターは移動・再登録できません。Favoriteの解除は元に戻せない可能性があります。'))}</div>` : groups.map(g=>{
+      const active=current.some(r=>r.type===g.type && r.tags.includes(g.name));
+      const label=`★${groups.indexOf(g)+1} ${g.label}`;
+      return `<button type="button" class="favorite-menu-item${active?' is-current':''}" role="menuitemradio" aria-checked="${active}" data-avatar-favorite-id="${escapeHtml(avatarId)}" data-avatar-favorite-group="${escapeHtml(g.key)}"><span class="favorite-menu-check" aria-hidden="true">${active?'✓':''}</span><span class="favorite-menu-label">${escapeHtml(label)}</span></button>`;
+    }).join('')) + (current.length ? `<div class="favorite-menu-separator" role="separator"></div><button type="button" class="favorite-menu-item favorite-menu-remove" data-avatar-favorite-id="${escapeHtml(avatarId)}" data-avatar-favorite-remove role="menuitem"><span class="favorite-menu-check" aria-hidden="true"></span><span class="favorite-menu-label">${escapeHtml(t('Favoriteを外す'))}</span></button>`:'')
+    : `<button type="button" class="favorite-menu-item" data-avatar-favorite-retry="${escapeHtml(avatarId)}">${escapeHtml(t('アバターFavoriteを再取得'))}</button>`);
+  state.favoriteMenu.avatarId=avatarId;state.favoriteMenu.userId='';state.favoriteMenu.worldId='';setFavoriteMenuAnchor(anchor);
+  state.favoriteMenu.fromFriendPreview=Boolean(elements.friendInstancePreview?.contains(anchor));
+  if(state.favoriteMenu.fromFriendPreview)clearFriendPreviewTimer('close');
+  menu.classList.remove('hidden');requestAnimationFrame(()=>positionFavoriteMenu(anchor));
+}
+async function openAvatarFavoriteMenu(avatarId, anchor) {
+  if(state.loading || state.favoriteMutationPending)return;
+  const store=avatarFavorites;const generation=state.loadGeneration;
+  if(CONFIG.DEBUG_MODE || CONFIG.SCREENSHOT_MODE){closeFavoriteMenu();renderAvatarFavoriteMenu(avatarId,anchor);return}
+  if(!store)return;
+  closeFavoriteMenu();renderAvatarFavoriteMenu(avatarId,anchor);
+  try{
+    if(!store.ready){elements.favoriteMenu.innerHTML=`<div class="favorite-menu-world-heading">${escapeHtml(t('アバターFavoriteを確認中…'))}</div>`;await store.load(true)}
+    if(generation!==state.loadGeneration||store!==avatarFavorites||state.favoriteMenu.avatarId!==avatarId)return;
+    renderAvatarFavoriteMenu(avatarId,anchor);
+  }catch(error){
+    if(generation!==state.loadGeneration||error?.name==='AbortError')return;
+    if(error?.status===401){handleSessionExpired();return}
+    if(state.favoriteMenu.avatarId===avatarId)renderAvatarFavoriteMenu(avatarId,anchor);
+    showActionToast(readFailureMessage('avatarFavorites',error),{error:true,delay:5200});
+  }
+}
+async function changeAvatarFavorite(avatarId, desired, expected, undo=false) {
+  if(CONFIG.DEBUG_MODE || CONFIG.SCREENSHOT_MODE){showActionToast(t('撮影用モード: アバターFavoriteは変更しません。'),{delay:2600});closeFavoriteMenu();return}
+  if(state.loading || state.favoriteMutationPending || !avatarFavorites)return;
+  const store=avatarFavorites,generation=state.loadGeneration,account=state.user?.id;
+  let deferAvatarReload=false;
+  const position=captureFavoritePosition('','',avatarId);
+  actionToast.clearUndo();state.favoriteUndo=null;state.favoriteMutationPending=true;state.favoriteMenu.busy=true;
+  elements.favoriteMenu?.querySelectorAll('button').forEach(b=>{b.disabled=true});
+  showActionToast(t('Favoriteを更新中…'),{delay:0});
+  try{
+    const unavailable=unavailableFavoriteAvatar(avatarId);
+    if(unavailable && desired.length){const e=new Error('Unavailable avatar');e.favoriteAvatarUnavailable=true;e.favoriteNoMutation=true;throw e}
+    const result=await store.change(avatarId,desired,expected);
+    if(generation!==state.loadGeneration||store!==avatarFavorites)return;
+    if(result.syncError?.status===401){handleSessionExpired();return}
+    closeFavoriteMenu();render({resetScroll:false});
+    if(undo)showActionToast(t('Favoriteを元に戻しました。'),{delay:2800});
+    else if(unavailable && !desired.length)showActionToast(t('取得不可のアバターのFavoriteを解除しました。元に戻すことはできません。'),{delay:6000});
+    else{
+      const ticket={avatarId,previous:result.previous,expected:result.expected,generation,account};state.favoriteUndo=ticket;
+      actionToast.setUndo(t('アバターFavoriteを更新しました。'),()=>{
+        if(state.favoriteUndo!==ticket||state.user?.id!==ticket.account)return;
+        void changeAvatarFavorite(avatarId,ticket.previous,ticket.expected,true);
+      },()=>{if(state.favoriteUndo===ticket)state.favoriteUndo=null});
+    }
+    if(result.syncFailed)showActionToast(t('Favoriteを更新しました（再同期に失敗しました。更新で再確認してください）。'),{delay:5200});
+  }catch(error){
+    if(generation!==state.loadGeneration||error?.name==='AbortError')return;
+    if(error?.status===401){handleSessionExpired();return}
+    deferAvatarReload=Boolean(error?.apiOriginRejected || error?.apiHeadersUnavailable || error?.status===429);
+    // Reconcile a failed or uncertain write once; no blind write retry.
+    if(!error?.favoriteNoMutation && !error?.apiOriginRejected && !error?.apiHeadersUnavailable && error?.status!==429)try{await store.load(true)}catch{store.ready=false}
+    if(generation!==state.loadGeneration||store!==avatarFavorites)return;
+    closeFavoriteMenu();render({resetScroll:false});
+    const message=error?.status===429 ? t('VRChatの通信制限に達しました。時間をおいて更新し、Favoriteの登録状態を確認してください。')
+      : error?.apiHeadersUnavailable ? t('通信設定を準備できませんでした。拡張機能を再読み込みしてください。詳細:')+' '+(error.diagnostic || error.code || 'API_HEADERS_UNAVAILABLE')
+      : error?.apiOriginRejected ? t('VRChatへの変更要求を送信できませんでした。拡張機能を再読み込みしてください。移動途中の場合は、時間をおいて更新し、公式ページで登録状態を確認してください。')
+      : error?.favoriteAvatarUnavailable ? t('取得不可または再登録できないアバターのため、登録を変更せずに中止しました。Favoriteの解除のみ可能です。')
+      : error?.favoriteNoMutation ? t('アバター情報を確認できませんでした。Favoriteの登録は変更していません。時間をおいて再試行してください。')
+      : error?.favoriteConflict ? t('Favoriteが別の画面で変更されたため、操作を中止しました。')
+      : error?.outcomeUnknown ? t('変更結果を確認できませんでした。更新してFavoriteの状態を確認してください。')
+      : error?.favoriteRollbackFailed ? t('アバターFavoriteの変更に失敗し、元の登録も復元できませんでした。更新で確認してください。')
+      : error?.favoriteListSetupSuggested ? t('空リストの登録に失敗しました。改善しない場合は、公式ページから各リストへ最低ひとつ以上のアバターをお気に入り登録した後、この拡張機能の更新ボタンで再取得してください。')
+      : t('アバターFavoriteを変更できませんでした。登録上限やアクセス権を確認してください。');
+    showActionToast(message,{error:true,delay:error?.favoriteListSetupSuggested?15000:6000});
+  }finally{
+    if(generation===state.loadGeneration){
+      state.favoriteMutationPending=false;state.favoriteMenu.busy=false;render({resetScroll:false});restoreFavoritePosition(position);
+      if(!deferAvatarReload&&state.viewMode===VIEW_MODES.AVATARS){
+        void loadAvatarView().finally(()=>{if(generation===state.loadGeneration)restoreFavoritePosition(position);position.dispose();});
+      }else position.dispose();
+    }else position.dispose();
+  }
+}
+function onAvatarFavoriteClick(event) {
+  const button=event.target.closest('.avatar-favorite-button');
+  const choice=event.target.closest('[data-avatar-favorite-group], [data-avatar-favorite-remove], [data-avatar-favorite-retry]');
+  if(!button && !(choice&&elements.favoriteMenu?.contains(choice)))return false;
+  event.preventDefault();event.stopPropagation();
+  if(state.favoriteMutationPending||state.loading)return true;
+  if(button){
+    const id=button.dataset.avatarFavoriteId;
+    if(state.favoriteMenu.avatarId===id&&state.favoriteMenu.anchor===button){closeFavoriteMenu({restoreFocus:true});return true}
+    clearFriendPreviewTimer('open');clearFriendPreviewTimer('close');
+    if(!elements.friendInstancePreview?.contains(button))hideFriendInstancePreview({immediate:true});
+    void openAvatarFavoriteMenu(id,button);return true;
+  }
+  if(choice.hasAttribute('data-avatar-favorite-retry')){void openAvatarFavoriteMenu(choice.dataset.avatarFavoriteRetry,state.favoriteMenu.anchor);return true}
+  const id=choice.dataset.avatarFavoriteId,current=avatarFavorites?.current(id)||[];
+  const group=avatarFavorites?.groups.find(g=>g.key===choice.dataset.avatarFavoriteGroup);
+  if(!choice.hasAttribute('data-avatar-favorite-remove')&&!group)return true;
+  void changeAvatarFavorite(id,group?[{type:group.type,tags:[group.name]}]:[],current);return true;
+}
+
 function onFavoriteUiClick(event) {
+  if (onAvatarFavoriteClick(event)) return;
   if (onWorldFavoriteClick(event)) return;
   const actionButton = event.target.closest('.favorite-action-button');
   if (actionButton) {
@@ -2543,7 +2791,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   hydrationController.disconnect();
 
   updateTabButtons();
-  elements.list.classList.toggle('world-view', state.viewMode === VIEW_MODES.RECENT);
+  elements.list.classList.toggle('world-view', state.viewMode === VIEW_MODES.RECENT || state.viewMode === VIEW_MODES.AVATARS);
   elements.list.classList.toggle('calendar-view', state.viewMode === VIEW_MODES.CALENDAR);
   renderFriendSidebar();
 
@@ -2552,6 +2800,8 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   const credit = `<div class="app-credit">VRChat Friends &amp; Group Instance Viewer v${escapeHtml(appVersion)} created by <a href="https://x.com/mos_vrc" target="_blank" rel="noopener noreferrer">@mos_vrc</a></div>`;
   if (state.viewMode === VIEW_MODES.RECENT) {
     patchMarkup(elements.list, `${renderRecentWorlds()}${credit}`);
+  } else if (state.viewMode === VIEW_MODES.AVATARS) {
+    patchMarkup(elements.list, `${renderFavoriteAvatars()}${credit}`);
   } else if (state.viewMode === VIEW_MODES.CALENDAR) {
     patchMarkup(elements.list, `${renderCalendarMonth({ view: calendarView, locale: getLocale() })}${renderCalendarBelow()}${credit}`);
   } else if (state.viewMode === VIEW_MODES.FRIENDS) {
@@ -2569,7 +2819,7 @@ function render({ resetScroll = false, hydrationMode = 'normal', priorityLocatio
   elements.list.scrollTop = rightScroll;
   updateBackToTop();
   startPendingGroupRefresh();
-  if (state.viewMode === VIEW_MODES.RECENT) {
+  if (state.viewMode === VIEW_MODES.RECENT || state.viewMode === VIEW_MODES.AVATARS) {
     // Stop unstarted instance work from the previous view. The visible left
     // location pane can still use the shared hydration queue.
     hydrationController.sync();
@@ -2839,6 +3089,7 @@ function loadDebugData() {
   setFavoriteGroupState(debug.favoriteGroups);
   state.instances = debug.instances;
   initializeDemoWorldFavorites(debug.instances);
+  initializeDemoAvatarFavorites();
   state.lastLoadedAt = Date.now();
   state.dataFromCache = false;
   elements.login?.classList.add('hidden');
@@ -2862,6 +3113,8 @@ function clearDisplayedData() {
   state.recent = { account: '', rows: [], ready: false, loading: false, error: false, token: state.recent.token + 1 };
   worldFavorites = null;
   worldCatalog=new WorldCatalog(); worldView={selected:'recent',loading:false,error:false,token:worldView.token+1,editor:null};
+  avatarFavorites = null;
+  avatarCatalog=new AvatarCatalog(); avatarView={selected:'',loading:false,error:false,token:avatarView.token+1,editor:null};
   state.favoriteGroupEditor = null;
   state.favoriteMutationPending = false;
   actionToast.clearUndo(); state.favoriteUndo = null;
@@ -2968,6 +3221,13 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
       worldFavorites.groups = previousWorlds.groups; worldFavorites.records = previousWorlds.records;
       worldFavorites.ready = previousWorlds.ready; worldFavorites.updatedAt = previousWorlds.updatedAt;
     }
+    const previousAvatars = avatarFavorites;
+    avatarFavorites = new AvatarFavorites(dataRepository.api, user);
+    avatarFavorites.account = user.id;
+    if (previousAvatars?.account === user.id) {
+      avatarFavorites.groups = previousAvatars.groups; avatarFavorites.records = previousAvatars.records;
+      avatarFavorites.ready = previousAvatars.ready; avatarFavorites.updatedAt = previousAvatars.updatedAt;
+    }
 
     // Do not paint stale cached lists first. Fetch the time-sensitive primary
     // datasets first so the first interactive render reflects current data (or
@@ -2998,6 +3258,7 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     state.loading = false;
     render();
     if (state.viewMode === VIEW_MODES.RECENT) void loadWorldView({ force: reason !== 'initial' });
+    if (state.viewMode === VIEW_MODES.AVATARS) void loadAvatarView({ force: reason !== 'initial' });
     // The calendar only fetches from its own entry points (toolbar button,
     // month navigation, refresh). When the popup reopens with the calendar
     // view restored from preferences, this dispatch is what loads the month;
@@ -3284,10 +3545,15 @@ elements.list?.addEventListener('dblclick', (event) => {
   });
 });
 elements.friendInstancePreview?.addEventListener('click', onWorldViewClick);
+elements.list?.addEventListener('click', onAvatarViewClick);
 elements.list?.addEventListener('submit', event=>{void saveWorldListName(event)});
-elements.list?.addEventListener('input', event=>{if(event.target.matches('.world-list-name') && worldView.editor && !worldView.editor.saving){worldView.editor.draft=event.target.value;event.target.closest('form').querySelector('.world-name-count').textContent=`${event.target.value.length} / 20`;}});
+elements.list?.addEventListener('submit', event=>{void saveAvatarListName(event)});
+elements.list?.addEventListener('input', event=>{if(event.target.matches('.world-list-name') && worldView.editor && !worldView.editor.saving && event.target.closest('[data-world-list-editor]')){worldView.editor.draft=event.target.value;event.target.closest('form').querySelector('.world-name-count').textContent=`${event.target.value.length} / 20`;}});
+elements.list?.addEventListener('input', event=>{if(event.target.matches('.world-list-name') && avatarView.editor && !avatarView.editor.saving && event.target.closest('[data-avatar-list-editor]')){avatarView.editor.draft=event.target.value;event.target.closest('form').querySelector('.world-name-count').textContent=`${event.target.value.length} / 20`;}});
 elements.list?.addEventListener('keydown',event=>{if(event.target.closest('[data-world-list-editor]')){if(event.key==='Escape'&&!event.isComposing&&!worldView.editor?.saving){event.preventDefault();worldView.editor=null;render();}if(event.key==='Enter'&&event.isComposing)event.preventDefault();}});
+elements.list?.addEventListener('keydown',event=>{if(event.target.closest('[data-avatar-list-editor]')){if(event.key==='Escape'&&!event.isComposing&&!avatarView.editor?.saving){event.preventDefault();avatarView.editor=null;render();}if(event.key==='Enter'&&event.isComposing)event.preventDefault();}});
 document.addEventListener('click',event=>{const editor=worldView.editor;if(!editor||editor.saving||event.target.closest('[data-world-list-editor],[data-world-edit]'))return;queueMicrotask(()=>{if(editor===worldView.editor){worldView.editor=null;render()}})},true);
+document.addEventListener('click',event=>{const editor=avatarView.editor;if(!editor||editor.saving||event.target.closest('[data-avatar-list-editor],[data-avatar-edit]'))return;queueMicrotask(()=>{if(editor===avatarView.editor){avatarView.editor=null;render()}})},true);
 elements.list?.addEventListener('click', onFriendViewControlClick);
 elements.list?.addEventListener('submit', event => { void saveFavoriteGroupName(event); });
 elements.list?.addEventListener('input', event => {
@@ -3329,6 +3595,7 @@ elements.loginButton?.addEventListener('click', () => {
 elements.copyDiagnosticButton?.addEventListener('click',copyDiagnostics);
 elements.copyStatusDiagnostic?.addEventListener('click',copyDiagnostics);
 elements.recentButton?.addEventListener('click', setRecentView);
+elements.avatarsButton?.addEventListener('click', setAvatarView);
 elements.calendarButton?.addEventListener('click', setCalendarView);
 elements.calendarPopup?.addEventListener('click', (event) => {
   if (event.target.closest('[data-calendar-popup-close]')) { closeCalendarEventPopup(); return; }
@@ -3360,21 +3627,22 @@ elements.notificationPanel.addEventListener('input',event=>{
 });
 
 function updateReloadButton() {
-  const loading=Boolean(state.loading || worldView.loading || state.recent.loading || (state.viewMode===VIEW_MODES.RECENT&&worldFavorites?.inflight));
+  const loading=Boolean(state.loading || worldView.loading || avatarView.loading || state.recent.loading || (state.viewMode===VIEW_MODES.RECENT&&worldFavorites?.inflight) || (state.viewMode===VIEW_MODES.AVATARS&&avatarFavorites?.inflight));
   elements.reloadButton?.setAttribute('aria-busy',String(loading));
-  if (elements.reloadButton) elements.reloadButton.disabled = Boolean(state.loading || worldView.loading || state.recent.loading || notificationBusy);
+  if (elements.reloadButton) elements.reloadButton.disabled = Boolean(state.loading || worldView.loading || avatarView.loading || state.recent.loading || notificationBusy);
 }
 
 async function refreshCurrentView() {
-  if (state.loading || worldView.loading || state.recent.loading) return;
+  if (state.loading || worldView.loading || avatarView.loading || state.recent.loading) return;
   if (state.favoriteMutationPending || state.pendingInvites.size || notificationBusy) {
     showActionToast(t('操作の完了後に更新してください。'));
     return;
   }
-  if(notificationReply || (state.favoriteGroupEditor&&!state.favoriteGroupEditor.outcomeUnknown) || (worldView.editor&&!worldView.editor.unknown)){showActionToast(t('編集を終了してから更新してください。'));return;}
+  if(notificationReply || (state.favoriteGroupEditor&&!state.favoriteGroupEditor.outcomeUnknown) || (worldView.editor&&!worldView.editor.unknown) || (avatarView.editor&&!avatarView.editor.unknown)){showActionToast(t('編集を終了してから更新してください。'));return;}
   const needsPrimaryRetry = !state.user || state.loadFailed || state.groupLoadFailed
     || (elements.showOffline?.checked && state.offlineNameLoad.failed);
   if (!needsPrimaryRetry && state.viewMode === VIEW_MODES.RECENT) { worldView.editor=null; await loadWorldView({ force: true }); return; }
+  if (!needsPrimaryRetry && state.viewMode === VIEW_MODES.AVATARS) { avatarView.editor=null; await loadAvatarView({ force: true }); return; }
   if (!needsPrimaryRetry && state.viewMode === VIEW_MODES.CALENDAR) { await loadCalendarMonth(); return; }
   await load({ reason: 'manual' });
 }
@@ -3433,6 +3701,7 @@ window.addEventListener('pagehide', () => {
   closeFavoriteMenu();
   state.recent.token += 1; state.recent.loading = false;
   worldView.token++; worldView.loading = false;
+  avatarView.token++; avatarView.loading = false;
 });
 window.addEventListener('pageshow', event => { startUpdatedAtClock(); if (event.persisted) { imageController.reset(); void load({ reason: 'restore' }); } });
 document.addEventListener('visibilitychange', () => {
