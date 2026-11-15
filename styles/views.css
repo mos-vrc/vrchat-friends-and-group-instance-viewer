@@ -1399,6 +1399,7 @@ body[data-instance-display="simple"] .card .thumb-wrap + .invite-me-button-simpl
 
 /* Inline monochrome footprints use the current theme's text color. */
 .recent-button { display: inline-flex; align-items: center; justify-content: center; }
+.recent-button[hidden] { display: none; }
 .recent-footprints-icon { width: 18px; height: 18px; display: block; flex: none; pointer-events: none; }
 
 /* Favorite list labels stay on a single scrollable row, without widening the page. */

@@ -36,6 +36,10 @@ export function createSettings({
       showIconFrames: state.showIconFrames,
       showNonFriendOwners: state.showNonFriendOwners,
       showFloatingMemo: state.showFloatingMemo,
+      showWorldView: state.showWorldView,
+      showAvatarView: state.showAvatarView,
+      showCalendarView: state.showCalendarView,
+      showNotifications: state.showNotifications,
       theme: state.theme,
       autoRefreshMinutes: state.autoRefreshMinutes,
       sidebarWidths: sidebarResizer.preferences(),
@@ -90,6 +94,14 @@ export function createSettings({
     state.showIconFrames=prefs.showIconFrames===true;elements.showIconFrames.checked=state.showIconFrames;
     state.showFloatingMemo = prefs.showFloatingMemo !== false;
     if(elements.showFloatingMemo)elements.showFloatingMemo.checked=state.showFloatingMemo;
+    state.showWorldView = prefs.showWorldView !== false;
+    if (elements.showWorldView) elements.showWorldView.checked = state.showWorldView;
+    state.showAvatarView = prefs.showAvatarView !== false;
+    if (elements.showAvatarView) elements.showAvatarView.checked = state.showAvatarView;
+    state.showCalendarView = prefs.showCalendarView !== false;
+    if (elements.showCalendarView) elements.showCalendarView.checked = state.showCalendarView;
+    state.showNotifications = prefs.showNotifications !== false;
+    if (elements.showNotifications) elements.showNotifications.checked = state.showNotifications;
     state.showNonFriendOwners = prefs.showNonFriendOwners === true;
     if (elements.showNonFriendOwners) elements.showNonFriendOwners.checked = state.showNonFriendOwners;
     applyInstanceSize();

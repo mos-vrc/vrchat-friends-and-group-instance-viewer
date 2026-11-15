@@ -4,6 +4,7 @@ const english = Object.freeze({
   "OtherPlatform・Offlineの設定を閉じる": "Hide OtherPlatform and Offline controls",
   "右下のメモ帳": "Bottom-right notepad",
   "右下にメモ帳機能を表示": "Show notepad in the bottom-right corner",
+  "表示する機能を選択": "Choose which features to show",
   "一部取得失敗": "Partially unavailable",
   "インスタンス情報を取得できませんでした。": "Could not load instance details.",
   "ワールド情報を取得できませんでした。": "Could not load world details.",

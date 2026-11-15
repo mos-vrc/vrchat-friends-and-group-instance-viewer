@@ -55,6 +55,10 @@ const elements = {
   showIconFrames: document.getElementById('showIconFrames'),
   showNonFriendOwners: document.getElementById('showNonFriendOwners'),
   showFloatingMemo: document.getElementById('showFloatingMemo'),
+  showWorldView: document.getElementById('showWorldView'),
+  showAvatarView: document.getElementById('showAvatarView'),
+  showCalendarView: document.getElementById('showCalendarView'),
+  showNotifications: document.getElementById('showNotifications'),
   settingsButton: document.getElementById('settingsButton'),
   settingsPanel: document.getElementById('settingsPanel'),
   settingsMore: document.getElementById('settingsMore'),
@@ -134,6 +138,10 @@ const state = {
   showIconFrames: false,
   showNonFriendOwners: false,
   showFloatingMemo: true,
+  showWorldView: true,
+  showAvatarView: true,
+  showCalendarView: true,
+  showNotifications: true,
   displayLimits: new Map(),
   theme: 'ash',
   autoRefreshMinutes: 0,
@@ -573,6 +581,15 @@ function applyMainSortOptions() {
       : SORTS.FRIENDS_DESC;
     elements.sort.setAttribute('aria-label', t('インスタンスの並び順'));
   }
+}
+
+// Feature visibility toggles only hide the toolbar icons; every feature
+// keeps loading and working internally exactly as before.
+function applyFeatureVisibility() {
+  if (elements.recentButton) elements.recentButton.hidden = !state.showWorldView;
+  if (elements.avatarsButton) elements.avatarsButton.hidden = !state.showAvatarView;
+  if (elements.calendarButton) elements.calendarButton.hidden = !state.showCalendarView;
+  if (elements.notificationsButton) elements.notificationsButton.hidden = !state.showNotifications;
 }
 
 function updateTabButtons() {
@@ -3471,6 +3488,9 @@ elements.showNonFriendOwners?.addEventListener('change', () => {
   if (state.friendPreview.location) renderFriendInstancePreview(getCurrentInstanceEntry(state.friendPreview.location));
 });
 elements.showFloatingMemo?.addEventListener('change',()=>{state.showFloatingMemo=elements.showFloatingMemo.checked;persistUiPreferences();floatingMemo.sync();resumeAutoRefresh();});
+for (const [element, key] of [[elements.showWorldView, 'showWorldView'], [elements.showAvatarView, 'showAvatarView'], [elements.showCalendarView, 'showCalendarView'], [elements.showNotifications, 'showNotifications']]) {
+  element?.addEventListener('change', () => { state[key] = element.checked; persistUiPreferences(); applyFeatureVisibility(); });
+}
 elements.offlineSort?.addEventListener('change', () => {
   state.offlineSort = elements.offlineSort.value;
   resetDisplayLimits(); persistUiPreferences(); render();
@@ -3749,6 +3769,7 @@ document.getElementById('language').addEventListener('change', event => {
   positionSettingsPanel();
 });
 restoreUiPreferences();
+applyFeatureVisibility();
 loadPersonalEvents();
 updateCalendarTodayDot();
 persistUiPreferences();
