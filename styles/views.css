@@ -1350,11 +1350,12 @@ body[data-theme="light"] .favorite-group-editor-error { color: #b42318; }
 .settings-label { white-space: normal; flex: 1 1 104px; overflow-wrap: anywhere; }
 .settings-row select { width: auto; min-width: 160px; max-width: 100%; flex: 0 1 auto; }
 .settings-row button { white-space: normal; height: auto; min-height: 30px; }
-/* The feature visibility switches read as one boxed group, so it stays clear
-   which rows the group title covers and where the group ends. */
-.feature-visibility-group { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--accent) 5%, transparent); }
-.feature-visibility-group .settings-group-title { padding-bottom: 2px; }
-.feature-visibility-group + .settings-row { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+/* Feature visibility rows read as sub-items of their group title: a leading
+   "・" on each label, and dividers that stop short of the panel edges (drawn
+   by ::before so the colour still follows each theme's row border colour). */
+.feature-visibility-row .settings-label::before { content: "・"; }
+.settings-row + .feature-visibility-row { border-top-style: none; position: relative; }
+.settings-row + .feature-visibility-row::before { content: ""; position: absolute; top: 0; left: 12px; right: 12px; border-top: 1px solid; border-top-color: inherit; }
 .cache-clear-button { max-width: 100%; }
 .load-more, .empty, .friend-location-section-empty, .favorite-group-editor-help,
 .favorite-group-editor-error, .action-toast { overflow-wrap: anywhere; white-space: normal; }
