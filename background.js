@@ -65,7 +65,7 @@ async function handleApiFetch(message, tabId) {
     const url = new URL(message.url);
     let body;
     try { body = JSON.parse(message.body); } catch { return { ok: false, status: 400, text: '' }; }
-    if (url.search || !/^\/api\/1\/favorite\/group\/(?:friend\/group_[012]|world\/worlds(?:0|[1-9]\d*)|vrcPlusWorld\/vrcPlusWorlds[1-9]\d*)\/usr_[A-Za-z0-9_-]+$/.test(url.pathname)
+    if (url.search || !/^\/api\/1\/favorite\/group\/(?:friend\/group_[012]|world\/worlds(?:0|[1-9]\d*)|vrcPlusWorld\/vrcPlusWorlds[1-9]\d*|avatar\/avatars[1-9]\d*)\/usr_[A-Za-z0-9_-]+$/.test(url.pathname)
       || !body || Object.keys(body).length !== 1 || typeof body.displayName !== 'string'
       || !body.displayName.trim() || body.displayName.trim().length > CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH || /[\r\n\u0000]/.test(body.displayName)) return { ok: false, status: 400, text: '' };
   }

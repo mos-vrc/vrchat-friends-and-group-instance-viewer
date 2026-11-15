@@ -41,7 +41,7 @@ function allowedWrite(url, method, text) {
   if (method === 'DELETE') return /^\/api\/1\/favorites\/fvrt_[A-Za-z0-9_-]+$/.test(u.pathname);
   if (method !== 'PUT') return false;
   let body; try { body = JSON.parse(text); } catch { return false; }
-  return /^\/api\/1\/favorite\/group\/(?:friend\/group_[012]|world\/worlds(?:0|[1-9]\d*)|vrcPlusWorld\/vrcPlusWorlds[1-9]\d*)\/usr_[A-Za-z0-9_-]+$/.test(u.pathname)
+  return /^\/api\/1\/favorite\/group\/(?:friend\/group_[012]|world\/worlds(?:0|[1-9]\d*)|vrcPlusWorld\/vrcPlusWorlds[1-9]\d*|avatar\/avatars[1-9]\d*)\/usr_[A-Za-z0-9_-]+$/.test(u.pathname)
     && body && Object.keys(body).length === 1 && typeof body.displayName === 'string'
     && body.displayName.trim().length > 0 && body.displayName.trim().length <= CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH
     && !/[\r\n\u0000]/.test(body.displayName);
