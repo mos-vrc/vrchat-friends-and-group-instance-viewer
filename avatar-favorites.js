@@ -159,7 +159,12 @@ export class AvatarFavorites {
       if(group.label===name)return;
       await this.api.fetchJson(`/favorite/group/${group.type}/${group.name}/${encodeURIComponent(this.account)}`,{method:'PUT',body:JSON.stringify({displayName:name})});
       try{await this.refreshGroups()}catch(e){e.outcomeUnknown=true;throw e}
-      if(this.groups.find(g=>g.key===key)?.label!==name){const e=new Error('Avatar list rename unconfirmed');e.outcomeUnknown=true;throw e}
+      // Renaming to the internal tag itself is stored as-is, but buildGroups
+      // presents it as the default "Favorite Avatars N" label; accept either
+      // presented form as confirmation.
+      const updatedIndex=this.groups.findIndex(g=>g.key===key);
+      const updated=this.groups[updatedIndex];
+      if(!updated || (updated.label!==name && !(name===updated.name && updated.label===`Favorite Avatars ${updatedIndex+1}`))){const e=new Error('Avatar list rename unconfirmed');e.outcomeUnknown=true;throw e}
     } finally {this.pending=false}
   }
   async add(avatarId, row) {
