@@ -95,7 +95,9 @@ export class AvatarFavorites {
         }
       }
       avatarGroups.sort((a,b)=>Number(a.name.match(/\d+$/)[0])-Number(b.name.match(/\d+$/)[0]));
-      avatarGroups.forEach((g,i)=>{if(g.synthetic)g.label=`Favorite Avatars ${i+1}`});
+      // The server stores the internal tag as the display name until a list
+      // is renamed; the official website presents those as "Favorite Avatars N".
+      avatarGroups.forEach((g,i)=>{if(g.synthetic || !g.label || g.label===g.name)g.label=`Favorite Avatars ${i+1}`});
       return avatarGroups;
     };
     const records=includeRecords?new Map():new Map([...this.records].map(([id,rows])=>[id,rows.filter(r=>TYPES.has(r.type))]).filter(([,rows])=>rows.length));
