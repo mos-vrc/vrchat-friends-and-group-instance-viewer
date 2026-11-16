@@ -369,6 +369,8 @@ const english = Object.freeze({
   "・": " / ",
   "イベントカレンダー": "Event calendar",
   "イベント詳細": "Event details",
+  "スターを付ける": "Star this event",
+  "スターを外す": "Remove star",
   "イベントを取得できませんでした。更新ボタンで再取得してください。": "Could not load events. Use the refresh button to try again.",
   "この月のイベントはありません。": "No events this month.",
   "この日のイベントはありません。": "No events on this day.",

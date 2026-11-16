@@ -188,6 +188,7 @@ export function renderCalendarMonth({ view, locale }) {
     : view.partial ? t('一部取得失敗')
     : (view.ready && !view.events.length) ? t('この月のイベントはありません。')
     : '';
+  const starredIds = new Set((view.starredEvents || []).map((row) => row.id));
   const allEvents = [...(view.events || []),
     ...(view.personalEvents || []).map(personalEventAsCalendarEvent)];
   const weeksHtml = weeks.map(week => {
@@ -198,7 +199,7 @@ export function renderCalendarMonth({ view, locale }) {
       const lanesHtml = laneCount ? `<span class="calendar-lanes">${[...Array(laneCount)].map((_, lane) => {
         const segment = segments.find(row => row.lane === lane);
         if (!segment) return '<span class="calendar-lane-empty"></span>';
-        return `<span class="calendar-seg${segment.isStart ? ' start' : ''}${segment.isEnd ? ' end' : ''}${segment.joinLeft ? ' join-l' : ''}${segment.joinRight ? ' join-r' : ''}${segment.event.personal ? ' personal' : ''}" ${segment.event.personal ? `data-calendar-personal="${escapeHtml(segment.event.id)}"` : `data-calendar-event="${escapeHtml(segment.event.id)}"`} title="${escapeHtml(segment.event.title || '')}">${segment.showTitle ? escapeHtml(segment.event.title || '') : ''}</span>`;
+        return `<span class="calendar-seg${segment.isStart ? ' start' : ''}${segment.isEnd ? ' end' : ''}${segment.joinLeft ? ' join-l' : ''}${segment.joinRight ? ' join-r' : ''}${segment.event.personal ? ' personal' : ''}${!segment.event.personal && starredIds.has(segment.event.id) ? ' starred' : ''}" ${segment.event.personal ? `data-calendar-personal="${escapeHtml(segment.event.id)}"` : `data-calendar-event="${escapeHtml(segment.event.id)}"`} title="${escapeHtml(segment.event.title || '')}">${segment.showTitle ? escapeHtml(segment.event.title || '') : ''}</span>`;
       }).join('')}${overflow > 0 ? `<span class="calendar-more">+${overflow}</span>` : ''}</span>` : '';
       return `<button type="button" class="calendar-day${day.inMonth ? '' : ' outside'}${day.key === todayKey ? ' today' : ''}${day.key === view.selectedDay ? ' selected' : ''}" data-calendar-day="${day.key}" aria-label="${day.key}">
         <span class="calendar-day-number">${day.date.getDate()}</span>
@@ -222,6 +223,7 @@ export function renderCalendarMonth({ view, locale }) {
 
 export function renderCalendarDayList({ view, locale }) {
   if (!view.selectedDay) return '';
+  const starredIds = new Set((view.starredEvents || []).map((row) => row.id));
   const timeFormat = new Intl.DateTimeFormat(locale || undefined, { hour: 'numeric', minute: '2-digit' });
   const vrcRows = (groupCalendarEventsByDay(view.events).get(view.selectedDay) || [])
     .map(event => ({ sortKey: String(event.startsAt || ''), event }));
@@ -244,7 +246,7 @@ export function renderCalendarDayList({ view, locale }) {
       const range = Number.isNaN(start.getTime()) ? ''
         : `${timeFormat.format(start)}${Number.isNaN(end.getTime()) ? '' : ` – ${timeFormat.format(end)}`}`;
       const group = view.groups.get(event.ownerId);
-      return `<button type="button" class="calendar-day-event${event.id === view.selectedEventId ? ' selected' : ''}" data-calendar-event="${escapeHtml(event.id)}">
+      return `<button type="button" class="calendar-day-event${event.id === view.selectedEventId ? ' selected' : ''}${starredIds.has(event.id) ? ' starred' : ''}" data-calendar-event="${escapeHtml(event.id)}">
       <span class="calendar-day-event-time">${escapeHtml(range)}</span>
       <span class="calendar-day-event-title">${escapeHtml(event.title || '')}</span>
       <span class="calendar-day-event-meta">${escapeHtml(calendarCategoryLabel(event.category))}${group?.name ? ` ・ ${escapeHtml(group.name)}` : ''}</span>
@@ -256,7 +258,7 @@ export function renderCalendarDayList({ view, locale }) {
   </section>`;
 }
 
-export function renderCalendarEventDetail({ event, group, detailImageUrl, locale }) {
+export function renderCalendarEventDetail({ event, group, detailImageUrl, locale, starred = false }) {
   if (!event) return '';
   const start = new Date(event.startsAt);
   const dateText = Number.isNaN(start.getTime()) ? ''
@@ -266,6 +268,7 @@ export function renderCalendarEventDetail({ event, group, detailImageUrl, locale
     <div class="calendar-detail-media">
       ${detailImageUrl ? `<img data-image-src="${escapeHtml(detailImageUrl)}" alt="">` : ''}
       <span class="calendar-detail-category">${escapeHtml(calendarCategoryLabel(event.category))}</span>
+      <button type="button" class="calendar-detail-star${starred ? ' active' : ''}" data-calendar-star="${escapeHtml(event.id)}" aria-pressed="${starred ? 'true' : 'false'}" aria-label="${escapeHtml(t(starred ? 'スターを外す' : 'スターを付ける'))}">★</button>
       <button type="button" class="calendar-detail-close" data-calendar-popup-close aria-label="${escapeHtml(t('閉じる'))}">×</button>
     </div>
     <div class="calendar-detail-body">

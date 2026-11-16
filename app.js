@@ -7,7 +7,7 @@ import { IconFrameCatalog, FrameAnimations, framedAvatar } from "./icon-frames.j
 import { NotificationLocal, canPinNotification, MEMO_MAX_LENGTH } from "./notification-local.js";
 import { elapsedUpdateLabel } from "./update-time.js";
 import { renderNotificationList } from "./notification-view.js";
-import { renderCalendarMonth, renderCalendarDayList, renderCalendarEventDetail, renderCalendarPersonalEditor, wirePersonalEditorTimeSegments, personalTimeGroupValue, calendarEventDayKey, calendarDayKey } from "./calendar-view.js";
+import { renderCalendarMonth, renderCalendarDayList, renderCalendarEventDetail, renderCalendarPersonalEditor, wirePersonalEditorTimeSegments, personalTimeGroupValue, calendarEventDayKey, calendarEventSpan, calendarDayKey } from "./calendar-view.js";
 import { summarizeGroupInstances, diagnosticLog } from "./diagnostics.js";
 import { refreshIsBlocked } from "./refresh-policy.js";
 import { NotificationStore, replySlot, REPLY_MAX_LENGTH, bulkNotificationAction, userId as notificationUserId } from "./notifications.js";
@@ -72,6 +72,7 @@ const elements = {
   avatarsButton: document.getElementById('avatarsButton'),
   calendarButton: document.getElementById('calendarButton'),
   calendarTodayDot: document.getElementById('calendarTodayDot'),
+  calendarStarMark: document.getElementById('calendarStarMark'),
   calendarPopup: document.getElementById('calendarPopup'),
 
   notificationsButton: document.getElementById('notificationsButton'),
@@ -102,7 +103,7 @@ let calendarView = {
   accountId: '', monthKey: '', events: [], groups: new Map(), groupPending: new Set(),
   loading: false, error: null, partial: false, ready: false, token: 0,
   selectedDay: '', selectedEventId: '', popupAnchor: null,
-  personalEvents: [], editor: null, editorKey: '',
+  personalEvents: [], editor: null, editorKey: '', starredEvents: [],
 };
 
 const VIEW_MODES = Object.freeze({
@@ -1036,6 +1037,54 @@ function updateCalendarTodayDot() {
   dot.hidden = !calendarView.personalEvents.some((entry) => entry.date === todayKey);
 }
 
+// Starred calendar events: the user's own ★ marks on VRChat events, kept
+// only in this browser like the personal entries. Each record carries the
+// event's local day span so the toolbar mark can light up on the day
+// itself without the month being loaded.
+const STARRED_EVENTS_KEY = 'vrc_viewer_starred_events';
+
+function loadStarredEvents() {
+  const stored = uiStorage.get(STARRED_EVENTS_KEY, []);
+  calendarView.starredEvents = Array.isArray(stored)
+    ? stored.filter((row) => row && typeof row.id === 'string'
+      && typeof row.start === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.start)
+      && typeof row.end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.end))
+      .map((row) => ({ id: row.id, start: row.start, end: row.end }))
+    : [];
+}
+
+function persistStarredEvents() {
+  uiStorage.set(STARRED_EVENTS_KEY, calendarView.starredEvents);
+}
+
+function isStarredEvent(id) {
+  return calendarView.starredEvents.some((row) => row.id === id);
+}
+
+function toggleStarredEvent(id) {
+  const event = calendarView.events.find((row) => row.id === id);
+  if (!event) return;
+  if (isStarredEvent(id)) {
+    calendarView.starredEvents = calendarView.starredEvents.filter((row) => row.id !== id);
+  } else {
+    const span = calendarEventSpan(event);
+    if (!span.startKey) return;
+    calendarView.starredEvents.push({ id, start: span.startKey, end: span.endKey });
+  }
+  persistStarredEvents();
+  updateCalendarStarMark();
+  render({ resetScroll: false });
+}
+
+// Green ★ badge on the calendar toolbar button while a starred event's
+// day span covers today.
+function updateCalendarStarMark() {
+  const mark = elements.calendarStarMark;
+  if (!mark) return;
+  const todayKey = calendarDayKey(new Date());
+  mark.hidden = !calendarView.starredEvents.some((row) => row.start <= todayKey && todayKey <= row.end);
+}
+
 function openPersonalEditor({ id = '', dateKey = '', anchor = null } = {}) {
   calendarView.editor = { id, dateKey };
   calendarView.selectedEventId = '';
@@ -1129,11 +1178,16 @@ function renderCalendarPopup() {
   // Events without their own image fall back to the group's image, then
   // its icon, mirroring the official event detail.
   const rawImage = event.imageUrl || group?.imageUrl || group?.iconUrl || '';
+  // The detail replaces whatever the panel showed, so the editor's
+  // re-render guard must not survive it: reopening the same editor target
+  // afterwards has to rebuild the form.
+  view.editorKey = '';
   patchMarkup(panel, renderCalendarEventDetail({
     event,
     group: group ? { name: group.name, iconUrl: group.iconUrl ? displayImageUrl(group.iconUrl, 'avatar') : '' } : null,
     detailImageUrl: rawImage ? displayImageUrl(rawImage, 'world') : '',
     locale: getLocale(),
+    starred: isStarredEvent(event.id),
   }));
   panel.classList.remove('hidden');
   const anchor = view.popupAnchor;
@@ -1182,6 +1236,10 @@ function onCalendarViewClick(event) {
   }
   const eventRow = event.target.closest('[data-calendar-event]');
   if (eventRow) {
+    // Switching to an event detail must drop any open personal editor:
+    // renderCalendarPopup prefers the editor whenever one is set, so a
+    // stale editor would swallow this click and reopen the form instead.
+    calendarView.editor = null;
     calendarView.selectedEventId = eventRow.dataset.calendarEvent;
     calendarView.popupAnchor = { x: event.clientX || 0, y: event.clientY || 0 };
     const picked = calendarView.events.find((row) => row.id === calendarView.selectedEventId);
@@ -3618,6 +3676,8 @@ elements.recentButton?.addEventListener('click', setRecentView);
 elements.avatarsButton?.addEventListener('click', setAvatarView);
 elements.calendarButton?.addEventListener('click', setCalendarView);
 elements.calendarPopup?.addEventListener('click', (event) => {
+  const star = event.target.closest('[data-calendar-star]');
+  if (star) { toggleStarredEvent(star.dataset.calendarStar); return; }
   if (event.target.closest('[data-calendar-popup-close]')) { closeCalendarEventPopup(); return; }
   if (event.target.closest('[data-personal-save]')) { savePersonalEditor(); return; }
   if (event.target.closest('[data-personal-delete]')) deletePersonalEditorEntry();
@@ -3772,6 +3832,8 @@ restoreUiPreferences();
 applyFeatureVisibility();
 loadPersonalEvents();
 updateCalendarTodayDot();
+loadStarredEvents();
+updateCalendarStarMark();
 persistUiPreferences();
 applyMainSortOptions();
 updateTabButtons();
