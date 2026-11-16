@@ -3000,6 +3000,25 @@ function updateBackToTop(){
 async function refreshGroupDataInBackground(userId, dataRepository, generation) {
   const current = () => generation === state.loadGeneration && !dataRepository.disposed;
   try {
+    // This pass is deferred until the visible cards finish hydrating, so the
+    // friend list from the start of load() can be far older than the group
+    // instances fetched here. Joining those two snapshots left friends who
+    // had just joined a Group instance unattached (the card showed the fresh
+    // user count with zero friends) until the next full reload. Re-read the
+    // friends back-to-back with the group instances so the join below uses
+    // two snapshots taken seconds apart. A failed re-read keeps the existing
+    // snapshot and continues; only a 401 aborts the pass.
+    try {
+      const friends = await dataRepository.fetchFriends();
+      if (!current()) return;
+      state.onlineFriends = normalizeFriends(friends);
+      rebuildDisplayedFriends();
+    } catch (error) {
+      if (!current() || error?.name === 'AbortError') return;
+      if (error?.status === 401) throw error;
+      diagnosticLog.record('friends', error);
+      console.warn('Could not refresh friends before group instances:', error);
+    }
     const groupInstances = await dataRepository.fetchGroupInstances(userId);
     if (!current()) return;
     state.groupLoadFailed = Boolean(dataRepository.groupInstancesError);
