@@ -1,6 +1,6 @@
 # VRChat Friends & Group Instance Viewer
 
-**Version: 1.7.0.8**
+**Version: 1.7.0.9**
 
 VRChatのフレンドの居場所、Friend / Groupインスタンス、Favoriteワールド、Favoriteアバター、通知をChromeで確認できる非公式拡張機能です。VRChat Inc.が制作・承認・提供するツールではありません。
 

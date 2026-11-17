@@ -268,7 +268,7 @@ export function renderCalendarEventDetail({ event, group, detailImageUrl, locale
     <div class="calendar-detail-media">
       ${detailImageUrl ? `<img data-image-src="${escapeHtml(detailImageUrl)}" alt="">` : ''}
       <span class="calendar-detail-category">${escapeHtml(calendarCategoryLabel(event.category))}</span>
-      <button type="button" class="calendar-detail-star${starred ? ' active' : ''}" data-calendar-star="${escapeHtml(event.id)}" aria-pressed="${starred ? 'true' : 'false'}" aria-label="${escapeHtml(t(starred ? 'スターを外す' : 'スターを付ける'))}">★</button>
+      <button type="button" class="calendar-detail-star${starred ? ' active' : ''}" data-calendar-star="${escapeHtml(event.id)}" aria-pressed="${starred ? 'true' : 'false'}" aria-label="${escapeHtml(t(starred ? 'カレンダーから外す' : 'カレンダーに追加'))}">★</button>
       <button type="button" class="calendar-detail-close" data-calendar-popup-close aria-label="${escapeHtml(t('閉じる'))}">×</button>
     </div>
     <div class="calendar-detail-body">

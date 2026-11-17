@@ -231,6 +231,22 @@ export class VrchatApiClient {
     return this.fetchJson(`/groups/${encodeURIComponent(groupId)}`);
   }
 
+  // The official "Add to Calendar" toggle. One endpoint both ways; the
+  // response carries the pre-update userInterest, so callers must apply
+  // the state they asked for instead of reading it back (verified live
+  // 2026-11-17 against the official event page).
+  setCalendarEventFollowing(ownerId, eventId, isFollowing) {
+    if (typeof ownerId !== 'string' || !/^grp_[A-Za-z0-9_-]+$/.test(ownerId)
+      || typeof eventId !== 'string' || !/^cal_[A-Za-z0-9_-]+$/.test(eventId)) {
+      throw new Error('Invalid calendar event.');
+    }
+    return this.fetchJson(`/calendar/${encodeURIComponent(ownerId)}/${encodeURIComponent(eventId)}/follow`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isFollowing: Boolean(isFollowing) }),
+    });
+  }
+
   fetchInstance(location) {
     const encodedPath = encodeInstancePath(location);
     return this.fetchJson(`/instances/${encodedPath}`);
@@ -626,9 +642,18 @@ export class DataRepository {
     const lists = [];
     let failures = 0;
     let firstError = null;
+    // The 'following' list is exactly the events the user has added to
+    // their calendar (verified live 2026-11-17), so its ids are the
+    // official follow state for the month. Null when that list failed:
+    // callers must not reconcile follow state from partial data.
+    let followedIds = null;
     for (const kind of kinds) {
       try {
-        lists.push(await this.api.fetchCalendarEvents(kind, dateIso));
+        const rows = await this.api.fetchCalendarEvents(kind, dateIso);
+        lists.push(rows);
+        if (kind === 'following') {
+          followedIds = new Set(rows.filter((row) => row && typeof row.id === 'string').map((row) => row.id));
+        }
       } catch (error) {
         if (error?.name === 'AbortError' || error?.status === 401) throw error;
         failures += 1;
@@ -640,7 +665,12 @@ export class DataRepository {
       event && typeof event.id === 'string' && typeof event.startsAt === 'string' && !event.deletedAt
     )));
     events.sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt)));
-    return { events, partial: failures > 0 };
+    return { events, partial: failures > 0, followedIds };
+  }
+
+  setCalendarEventFollowing(ownerId, eventId, isFollowing) {
+    this.requireCurrentUser();
+    return this.api.setCalendarEventFollowing(ownerId, eventId, isFollowing);
   }
 
   cacheFriendProfiles(friends) {

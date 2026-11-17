@@ -37,7 +37,14 @@ function allowedWrite(url, method, text) {
   if (method === 'GET') return true;
   if (u.search) return false;
   if (allowedNotificationWrite(u.pathname, method, text)) return true;
-  if (method === 'POST') return u.pathname === '/api/1/favorites' || /^\/api\/1\/invite\/myself\/to\/[^?#]+$/.test(u.pathname);
+  if (method === 'POST') {
+    if (u.pathname === '/api/1/favorites' || /^\/api\/1\/invite\/myself\/to\/[^?#]+$/.test(u.pathname)) return true;
+    if (/^\/api\/1\/calendar\/grp_[A-Za-z0-9_-]+\/cal_[A-Za-z0-9_-]+\/follow$/.test(u.pathname)) {
+      let body; try { body = JSON.parse(text); } catch { return false; }
+      return Boolean(body) && Object.keys(body).length === 1 && typeof body.isFollowing === 'boolean';
+    }
+    return false;
+  }
   if (method === 'DELETE') return /^\/api\/1\/favorites\/fvrt_[A-Za-z0-9_-]+$/.test(u.pathname);
   if (method !== 'PUT') return false;
   let body; try { body = JSON.parse(text); } catch { return false; }

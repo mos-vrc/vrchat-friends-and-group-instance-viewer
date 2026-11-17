@@ -18,5 +18,13 @@ export function buildApiHeaderRules(extensionId, userAgent) {
   origin(1006,'|https://vrchat.com/api/1/auth/user/notifications/',['put']),
   origin(1007,'|https://vrchat.com/api/1/invite/',['post']),
   origin(1008,'|https://vrchat.com/api/1/notifications/',['post']),
-  origin(1009,'|https://vrchat.com/api/1/message/',['put'])];
+  origin(1009,'|https://vrchat.com/api/1/message/',['put']),
+  // The calendar follow endpoint rejects non-vrchat.com Origins outright
+  // (403 "Origin ... not acceptable", verified live 2026-11-17), unlike
+  // the older write endpoints. Same treatment as the other writes.
+  {
+    id:1010,priority:100,
+    action:{type:'modifyHeaders',requestHeaders:[{header:'origin',operation:'set',value:'https://vrchat.com'}]},
+    condition:{...own,regexFilter:'^https://vrchat\\.com/api/1/calendar/grp_[^/]+/cal_[^/]+/follow$',requestDomains:['vrchat.com'],requestMethods:['post']},
+  }];
 }

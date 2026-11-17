@@ -3,6 +3,14 @@ import { buildApiHeaderRules } from './api-header-rules.js';
 import { CONFIG } from './config.js';
 import { isAllowedApiUrl, SharedRequestGate, withTimeout } from './request-policy.js';
 
+// Mirror of the calendar-follow branch in native-session.js allowedWrite:
+// the official "Add to Calendar" toggle, exact path + single boolean field.
+function allowedCalendarFollowWrite(pathname, text) {
+  if (!/^\/api\/1\/calendar\/grp_[A-Za-z0-9_-]+\/cal_[A-Za-z0-9_-]+\/follow$/.test(pathname)) return false;
+  let body; try { body = JSON.parse(text); } catch { return false; }
+  return Boolean(body) && Object.keys(body).length === 1 && typeof body.isFollowing === 'boolean';
+}
+
 const requestGate = new SharedRequestGate();
 const pendingGets = new Map();
 let apiRuleInstalled = false;
@@ -59,7 +67,8 @@ async function handleApiFetch(message, tabId) {
   if (method !== 'GET' && requestUrl.search) return { ok:false,status:400,text:'' };
   const notificationWrite=allowedNotificationWrite(requestUrl.pathname,method,message.body);
   if (!notificationWrite && method === 'POST' && requestUrl.pathname !== '/api/1/favorites'
-    && !/^\/api\/1\/invite\/myself\/to\/[^?#]+$/.test(requestUrl.pathname)) return { ok:false,status:400,text:'' };
+    && !/^\/api\/1\/invite\/myself\/to\/[^?#]+$/.test(requestUrl.pathname)
+    && !allowedCalendarFollowWrite(requestUrl.pathname, message.body)) return { ok:false,status:400,text:'' };
   if (!notificationWrite && method === 'DELETE' && !/^\/api\/1\/favorites\/fvrt_[A-Za-z0-9_-]+$/.test(requestUrl.pathname)) return { ok:false,status:400,text:'' };
   if (!notificationWrite && method === 'PUT') {
     const url = new URL(message.url);

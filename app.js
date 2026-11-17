@@ -103,7 +103,7 @@ let calendarView = {
   accountId: '', monthKey: '', events: [], groups: new Map(), groupPending: new Set(),
   loading: false, error: null, partial: false, ready: false, token: 0,
   selectedDay: '', selectedEventId: '', popupAnchor: null,
-  personalEvents: [], editor: null, editorKey: '', starredEvents: [],
+  personalEvents: [], editor: null, editorKey: '', starredEvents: [], followPending: new Set(),
 };
 
 const VIEW_MODES = Object.freeze({
@@ -970,11 +970,12 @@ async function loadCalendarMonth({ ifNeeded = false } = {}) {
     // Ask for the month via its middle (15th, midday UTC) so the API lands
     // in the intended month no matter which timezone it reads the date in.
     const dateIso = new Date(Date.UTC(view.cursor.getFullYear(), view.cursor.getMonth(), 15, 12)).toISOString();
-    const { events, partial } = await repo.fetchCalendarMonth(dateIso);
+    const { events, partial, followedIds } = await repo.fetchCalendarMonth(dateIso);
     if (!current()) return;
     view.events = events; view.partial = partial; view.ready = true;
     view.accountId = account; view.monthKey = monthKey;
     void prefetchCalendarGroups(view, current);
+    void syncCalendarFollows(view, repo, followedIds, current);
   } catch (error) {
     if (!current()) return;
     if (error?.status === 401) { handleSessionExpired(); return; }
@@ -1037,10 +1038,16 @@ function updateCalendarTodayDot() {
   dot.hidden = !calendarView.personalEvents.some((entry) => entry.date === todayKey);
 }
 
-// Starred calendar events: the user's own ★ marks on VRChat events, kept
-// only in this browser like the personal entries. Each record carries the
-// event's local day span so the toolbar mark can light up on the day
-// itself without the month being loaded.
+// Calendar event follows: the ★ on a VRChat event is the official
+// "Add to Calendar" state (the event's presence in the /calendar/following
+// list), not an add-on-only mark. The server is the source of truth;
+// starredEvents is only a local mirror of followed events ({id, start,
+// end, official}) so the toolbar badge can light up on the day itself
+// without the month being loaded. Mirror rows confirmed against the
+// server carry official:true. Rows written by v1.7.0.7 (purely local
+// stars) have no flag: the first month load containing such an event
+// follows it on the server once, so the marks the user already made
+// become real instead of being silently dropped.
 const STARRED_EVENTS_KEY = 'vrc_viewer_starred_events';
 
 function loadStarredEvents() {
@@ -1049,7 +1056,7 @@ function loadStarredEvents() {
     ? stored.filter((row) => row && typeof row.id === 'string'
       && typeof row.start === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.start)
       && typeof row.end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.end))
-      .map((row) => ({ id: row.id, start: row.start, end: row.end }))
+      .map((row) => ({ id: row.id, start: row.start, end: row.end, official: row.official === true }))
     : [];
 }
 
@@ -1061,19 +1068,84 @@ function isStarredEvent(id) {
   return calendarView.starredEvents.some((row) => row.id === id);
 }
 
-function toggleStarredEvent(id) {
-  const event = calendarView.events.find((row) => row.id === id);
-  if (!event) return;
-  if (isStarredEvent(id)) {
-    calendarView.starredEvents = calendarView.starredEvents.filter((row) => row.id !== id);
-  } else {
-    const span = calendarEventSpan(event);
-    if (!span.startKey) return;
-    calendarView.starredEvents.push({ id, start: span.startKey, end: span.endKey });
+function upsertStarredEvent(event, official) {
+  const span = calendarEventSpan(event);
+  if (!span.startKey) return;
+  const row = { id: event.id, start: span.startKey, end: span.endKey, official };
+  const index = calendarView.starredEvents.findIndex((entry) => entry.id === event.id);
+  if (index >= 0) calendarView.starredEvents[index] = row;
+  else calendarView.starredEvents.push(row);
+}
+
+function removeStarredEvent(id) {
+  calendarView.starredEvents = calendarView.starredEvents.filter((row) => row.id !== id);
+}
+
+// Reconcile the follow mirror with a month the server just returned.
+// followedIds is null when the following list itself failed; the mirror
+// then stays untouched rather than un-starring events on partial data.
+async function syncCalendarFollows(view, repo, followedIds, current) {
+  if (!followedIds) return;
+  let changed = false;
+  const legacy = [];
+  for (const event of view.events) {
+    const row = calendarView.starredEvents.find((entry) => entry.id === event.id);
+    if (followedIds.has(event.id)) {
+      if (!row || !row.official) { upsertStarredEvent(event, true); changed = true; }
+    } else if (row?.official) {
+      removeStarredEvent(event.id); changed = true;
+    } else if (row) {
+      legacy.push(event);
+    }
   }
-  persistStarredEvents();
-  updateCalendarStarMark();
-  render({ resetScroll: false });
+  if (changed) { persistStarredEvents(); updateCalendarStarMark(); }
+  // One-time migration of v1.7.0.7 local-only stars: follow them on the
+  // server so the marks the user already made become the official state.
+  // A failed migration is not retried inside this pass; the row stays
+  // local-only and a later month load tries again.
+  for (const event of legacy) {
+    if (!current()) return;
+    try {
+      await repo.setCalendarEventFollowing(event.ownerId, event.id, true);
+    } catch (error) {
+      if (error?.status === 401) { handleSessionExpired(); return; }
+      continue;
+    }
+    if (!current()) return;
+    upsertStarredEvent(event, true);
+    persistStarredEvents(); updateCalendarStarMark(); changed = true;
+  }
+  if (changed && state.viewMode === VIEW_MODES.CALENDAR) render({ resetScroll: false });
+}
+
+async function toggleStarredEvent(id) {
+  const event = calendarView.events.find((row) => row.id === id);
+  if (!event || calendarView.followPending.has(id)) return;
+  const target = !isStarredEvent(id);
+  if (typeof event.ownerId !== 'string' || !event.ownerId.startsWith('grp_')) {
+    showActionToast(t('カレンダーへの追加に失敗しました'), { error: true, delay: 5600 });
+    return;
+  }
+  calendarView.followPending.add(id);
+  try {
+    await repository.setCalendarEventFollowing(event.ownerId, id, target);
+    // The POST response carries the pre-update userInterest, so apply
+    // the state that was asked for instead of reading it back.
+    if (target) upsertStarredEvent(event, true);
+    else removeStarredEvent(id);
+    event.userInterest = { ...(event.userInterest || {}), isFollowing: target };
+    persistStarredEvents();
+    updateCalendarStarMark();
+    render({ resetScroll: false });
+  } catch (error) {
+    if (error?.status === 401) { handleSessionExpired(); return; }
+    // A failed or uncertain write is never resent; the local state stays
+    // as it was and the next month load reconciles with the server.
+    diagnosticLog.record('calendar', error);
+    showActionToast(t(target ? 'カレンダーへの追加に失敗しました' : 'カレンダーからの削除に失敗しました'), { error: true, delay: 5600 });
+  } finally {
+    calendarView.followPending.delete(id);
+  }
 }
 
 // Green ★ badge on the calendar toolbar button while a starred event's
@@ -3696,7 +3768,7 @@ elements.avatarsButton?.addEventListener('click', setAvatarView);
 elements.calendarButton?.addEventListener('click', setCalendarView);
 elements.calendarPopup?.addEventListener('click', (event) => {
   const star = event.target.closest('[data-calendar-star]');
-  if (star) { toggleStarredEvent(star.dataset.calendarStar); return; }
+  if (star) { void toggleStarredEvent(star.dataset.calendarStar); return; }
   if (event.target.closest('[data-calendar-popup-close]')) { closeCalendarEventPopup(); return; }
   if (event.target.closest('[data-personal-save]')) { savePersonalEditor(); return; }
   if (event.target.closest('[data-personal-delete]')) deletePersonalEditorEntry();
