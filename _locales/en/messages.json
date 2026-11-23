@@ -1,14 +1,14 @@
 {
   "extensionName": {
-    "message": "VRChat Friends & Group Instance Viewer",
+    "message": "VRChat Dashboard Addon",
     "description": "Extension product name; shared across languages."
   },
   "extensionDescription": {
-    "message": "Unofficial VRChat viewer for friends, instances, Favorite worlds and notifications, with Favorite and invite management.",
+    "message": "Unofficial VRChat dashboard: see where your friends are at a glance, with Favorite worlds/avatars, event calendar and notifications.",
     "description": "Description shown by Chrome in extension management."
   },
   "extensionActionTitle": {
-    "message": "VRChat Friends & Group Instance Viewer",
+    "message": "VRChat Dashboard Addon",
     "description": "Tooltip for the toolbar button."
   }
 }

@@ -1,7 +1,7 @@
 # Privacy Policy
-## VRChat Friends & Group Instance Viewer
+## VRChat Dashboard Addon
 
-最終更新日: 2026年10月20日
+最終更新日: 2026年11月23日（名称変更に伴う更新。旧名称は「VRChat Friends & Group Instance Viewer」です）
 
 本拡張機能は、VRChatのフレンド・インスタンス・ワールド・通知を一覧表示し、Favoriteを管理する非公式Chrome拡張機能です。VRChat Inc.によって制作、承認、または提供されているものではありません。
 

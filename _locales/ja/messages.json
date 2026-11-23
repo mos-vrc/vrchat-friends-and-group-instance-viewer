@@ -1,14 +1,14 @@
 {
   "extensionName": {
-    "message": "VRChat Friends & Group Instance Viewer",
+    "message": "VRChat Dashboard Addon",
     "description": "Extension product name; shared across languages."
   },
   "extensionDescription": {
-    "message": "VRChatのフレンド・インスタンス・Favoriteワールド・通知を確認し、Favoriteや招待を管理する非公式ビューアです。",
+    "message": "VRChatのフレンドの居場所をひと目で確認できる非公式ダッシュボード。Favoriteワールド／アバター管理、イベントカレンダー、通知にも対応。",
     "description": "Description shown by Chrome in extension management."
   },
   "extensionActionTitle": {
-    "message": "VRChat Friends & Group Instance Viewer",
+    "message": "VRChat Dashboard Addon",
     "description": "Tooltip for the toolbar button."
   }
 }
