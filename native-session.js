@@ -1,7 +1,6 @@
-import { allowedNotificationWrite } from './notifications.js';
 import { CONFIG } from './config.js';
 import { buildApiHeaderRules } from './api-header-rules.js';
-import { abortError, createCooldownStore, isAllowedApiUrl, retryAfterDeadline, withTimeout } from './request-policy.js';
+import { abortError, allowedWriteRequest, createCooldownStore, isAllowedApiUrl, retryAfterDeadline, withTimeout } from './request-policy.js';
 
 const cooldownStore = createCooldownStore();
 let headerPromise, localNextStart = 0, localCooldown = 0, nextReadSlot = 0;
@@ -34,24 +33,7 @@ async function prepareHeaders() {
 
 function allowedWrite(url, method, text) {
   const u = new URL(url);
-  if (method === 'GET') return true;
-  if (u.search) return false;
-  if (allowedNotificationWrite(u.pathname, method, text)) return true;
-  if (method === 'POST') {
-    if (u.pathname === '/api/1/favorites' || /^\/api\/1\/invite\/myself\/to\/[^?#]+$/.test(u.pathname)) return true;
-    if (/^\/api\/1\/calendar\/grp_[A-Za-z0-9_-]+\/cal_[A-Za-z0-9_-]+\/follow$/.test(u.pathname)) {
-      let body; try { body = JSON.parse(text); } catch { return false; }
-      return Boolean(body) && Object.keys(body).length === 1 && typeof body.isFollowing === 'boolean';
-    }
-    return false;
-  }
-  if (method === 'DELETE') return /^\/api\/1\/favorites\/fvrt_[A-Za-z0-9_-]+$/.test(u.pathname);
-  if (method !== 'PUT') return false;
-  let body; try { body = JSON.parse(text); } catch { return false; }
-  return /^\/api\/1\/favorite\/group\/(?:friend\/group_[012]|world\/worlds(?:0|[1-9]\d*)|vrcPlusWorld\/vrcPlusWorlds[1-9]\d*|avatar\/avatars[1-9]\d*)\/usr_[A-Za-z0-9_-]+$/.test(u.pathname)
-    && body && Object.keys(body).length === 1 && typeof body.displayName === 'string'
-    && body.displayName.trim().length > 0 && body.displayName.trim().length <= CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH
-    && !/[\r\n\u0000]/.test(body.displayName);
+  return allowedWriteRequest(u.pathname, method, text, Boolean(u.search));
 }
 
 // The document owns fetch and its lock. Chrome releases document-owned locks

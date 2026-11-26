@@ -20,8 +20,16 @@ export function createSettings({
     return prefs && typeof prefs === 'object' && !Array.isArray(prefs) ? prefs : {};
   }
 
+  // Snapshot of the preferences as this window last read or wrote them.
+  // persistUiPreferences compares the stored value against this snapshot:
+  // a key whose stored value moved since the snapshot was changed by
+  // another open Viewer window, and that newer value wins over this
+  // window's stale in-memory state.
+  let syncedPrefs = null;
+
   function persistUiPreferences() {
-    uiStorage.set(CONFIG.UI_PREFERENCES_KEY, {
+    const stored = readUiPreferences();
+    const next = {
       language: getLocale(),
       updatedTimeMode: state.updatedTimeMode,
       settingsAdvancedExpanded: state.settingsAdvancedExpanded,
@@ -46,14 +54,40 @@ export function createSettings({
       sidebarMode: state.sidebarMode,
       sidebarFooterExpanded: state.sidebarFooterExpanded,
       sidebarCollapsed: state.sidebarMode === 'hidden',
-      friendFilter: elements.friendFilter?.value || 'all',
-      showOnWebsite: elements.showOnWebsite?.checked !== false,
-      showOffline: elements.showOffline?.checked === true,
-    });
+      // Element-backed fields keep their stored value when the element is
+      // absent, instead of writing a default that restore reads differently.
+      friendFilter: elements.friendFilter?.value
+        || (typeof stored.friendFilter === 'string' ? stored.friendFilter : 'all'),
+      showOnWebsite: elements.showOnWebsite ? elements.showOnWebsite.checked
+        : (typeof stored.showOnWebsite === 'boolean' ? stored.showOnWebsite : false),
+      showOffline: elements.showOffline ? elements.showOffline.checked
+        : (typeof stored.showOffline === 'boolean' ? stored.showOffline : false),
+    };
+    if (syncedPrefs) {
+      for (const key of Object.keys(next)) {
+        // Only keys the snapshot actually holds can be judged: a key the
+        // snapshot lacks has no baseline (e.g. first run), so this
+        // window's value wins for it.
+        if (key in stored && key in syncedPrefs
+          && JSON.stringify(stored[key]) !== JSON.stringify(syncedPrefs[key])
+          && JSON.stringify(stored[key]) !== JSON.stringify(next[key])) {
+          next[key] = stored[key];
+        }
+      }
+    }
+    uiStorage.set(CONFIG.UI_PREFERENCES_KEY, next);
+    syncedPrefs = next;
+  }
+
+  // Called when another window writes the preferences key: this window's
+  // next persist must treat those values as the current stored state.
+  function noteExternalUiPreferences() {
+    syncedPrefs = readUiPreferences();
   }
 
   function restoreUiPreferences() {
     const prefs = readUiPreferences();
+    syncedPrefs = JSON.parse(JSON.stringify(prefs));
     setLocale(initialLanguage(prefs.language));
     state.updatedTimeMode=prefs.updatedTimeMode==='exact'?'exact':'relative';
     setSettingsAdvanced(prefs.settingsAdvancedExpanded===true);
@@ -284,6 +318,7 @@ export function createSettings({
     readUiPreferences,
     persistUiPreferences,
     restoreUiPreferences,
+    noteExternalUiPreferences,
     updateInstanceSizeButtons,
     applyInstanceSize,
     applyInstanceDisplay,

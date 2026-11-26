@@ -2,6 +2,8 @@ export const CONFIG = Object.freeze({
   // Local UI/debug mode. Set DEBUG_MODE to true to render synthetic data only.
   // No VRChat API requests are made while this mode is enabled.
   DEBUG_MODE: false,
+  // Screenshot builds patch this to true; the shipped build always runs live.
+  SCREENSHOT_MODE: false,
   OFFLINE_ACTIVITY_CACHE_TTL_MS: 10 * 60 * 1000,
   OFFLINE_PAGE_CACHE_TTL_MS: 30 * 1000,
   FAVORITE_GROUP_NAME_MAX_LENGTH: 20,
@@ -31,6 +33,9 @@ export const CONFIG = Object.freeze({
   FOCUS_HYDRATION_DELAY_MS: 1050,
   API_MIN_INTERVAL_MS: 100,
   API_MAX_RETRIES: 3,
+  // Overall cap on waiting out request-gate deferrals (e.g. a cooldown set
+  // by another tab). Past this the request fails instead of lingering.
+  API_DEFERRED_MAX_WAIT_MS: 120 * 1000,
   API_MAX_CONCURRENCY: 1,
   API_READ_CONCURRENCY: 5,
   API_TIMEOUT_MS: 20000,
@@ -50,6 +55,9 @@ export const CONFIG = Object.freeze({
   USER_DETAIL_CACHE_MAX_ENTRIES: 3000,
   USER_DETAIL_CACHE_TTL_MS: 24 * 60 * 60 * 1000,
   FRIEND_CACHE_TTL_MS: 15 * 1000,
+  // Upper bound on the age of primary-dataset stale fallbacks (friends,
+  // favorites, group instances) used when a live fetch fails.
+  PRIMARY_STALE_MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000,
   FAVORITE_CACHE_TTL_MS: 60 * 1000,
   GROUP_INSTANCES_CACHE_TTL_MS: 30 * 1000,
   GROUP_CACHE_TTL_MS: 24 * 60 * 60 * 1000,

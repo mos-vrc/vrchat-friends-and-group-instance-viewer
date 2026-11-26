@@ -76,13 +76,14 @@ export class ValueCache {
     return record.data;
   }
 
-  getStale() {
-    return this.getStaleRecord()?.data ?? null;
+  getStale(maxAgeMs = null) {
+    return this.getStaleRecord(maxAgeMs)?.data ?? null;
   }
 
-  getStaleRecord() {
+  getStaleRecord(maxAgeMs = null) {
     const record = this.load();
     if (!record || !Object.prototype.hasOwnProperty.call(record, 'data')) return null;
+    if (Number.isFinite(maxAgeMs) && (!Number.isFinite(record.cachedAt) || Date.now() - record.cachedAt >= maxAgeMs)) return null;
     return record;
   }
 

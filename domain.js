@@ -226,26 +226,6 @@ export function friendIsOnline(friend) {
   return onlineStatusInfo(friend).className !== ONLINE_STATUS.OFFLINE.className;
 }
 
-export function isUserOfflineEquivalent(user) {
-  if (!user || typeof user !== 'object') return false;
-
-  const rawStatus = String(user.status ?? '').trim().toLowerCase();
-  const rawState = String(user.state ?? '').trim().toLowerCase();
-  const platform = String(user.platform ?? '').trim().toLowerCase();
-  const hasActivityFields = [
-    'status', 'state', 'platform', 'location', 'last_platform', 'last_activity', 'last_login',
-  ].some((key) => Object.prototype.hasOwnProperty.call(user, key));
-
-  if (!hasActivityFields) return false;
-  if (platform === 'web') return false;
-  if (rawStatus === 'active' || rawStatus === 'online' || rawStatus === 'join me' || rawStatus === 'join_me'
-    || rawStatus === 'ask me' || rawStatus === 'ask_me' || rawStatus === 'busy'
-    || rawStatus === 'do not disturb' || rawStatus === 'do_not_disturb') return false;
-  if (rawState === 'active' || rawState === 'online') return false;
-
-  return onlineStatusInfo(user).className === ONLINE_STATUS.OFFLINE.className;
-}
-
 export function normalizeUser(user, friendMap = null) {
   if (!user) return null;
   if (typeof user === 'string') {

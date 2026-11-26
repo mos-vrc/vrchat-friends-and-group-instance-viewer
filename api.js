@@ -1,7 +1,7 @@
 import { assertAccount } from './account-session.js';
 import { diagnosticLog } from './diagnostics.js';
 import { t } from './i18n.js';
-import { abortError, waitUntil, waitForVisible } from './request-policy.js';
+import { abortError, combineSignals, waitUntil, waitForVisible } from './request-policy.js';
 import { CONFIG } from './config.js';
 import { ObjectCache, ValueCache, accountCacheKey } from './storage.js';
 import { slimWorld } from './domain.js';
@@ -27,14 +27,24 @@ export class VrchatApiClient {
 
   async fetchJson(path, options = {}) {
     if (this.controller.signal.aborted) throw abortError();
+    // Callers pass API-relative paths only; the base URL is fixed here and
+    // the transport re-validates the final URL, so an absolute URL at this
+    // entry point is always a programming error.
+    if (typeof path !== 'string' || /^https?:\/\//i.test(path)) {
+      const error = new Error('Invalid API path');
+      error.code = 'INVALID_URL';
+      throw error;
+    }
     const method = (options.method || 'GET').toUpperCase();
-    if (method !== 'GET') {
+    if (method !== 'GET' || options.signal) {
       // Never share mutations, or let their verification join a pre-write GET.
+      // A caller-owned signal also opts out of sharing: aborting one consumer
+      // must not cancel a request another consumer is waiting on.
       this.reads.clear();
       try { return await this.fetchJsonUnshared(path, options); }
       finally { this.reads.clear(); }
     }
-    const url = /^https?:\/\//i.test(path) ? path : `${this.baseUrl}${path}`;
+    const url = `${this.baseUrl}${path}`;
     const key = JSON.stringify([url, Object.entries(options.headers || {}).sort()]);
     let task = this.reads.get(key);
     if (!task) {
@@ -55,11 +65,16 @@ export class VrchatApiClient {
   }
 
   async fetchJsonRequest(path, options = {}) {
-    const url = /^https?:\/\//i.test(path) ? path : `${this.baseUrl}${path}`;
+    const url = `${this.baseUrl}${path}`;
     const method = (options.method || 'GET').toUpperCase();
-    const signal = this.controller.signal;
+    // Honor a caller-owned signal (e.g. NotificationStore.dispose) alongside
+    // the client-wide abort.
+    const signal = options.signal
+      ? combineSignals([this.controller.signal, options.signal])
+      : this.controller.signal;
     let attempt = 0;
     let transportRetry = false;
+    let deferredSince = 0;
     while (true) {
       if (signal.aborted) throw abortError();
       if (method === 'GET') await waitForVisible(signal);
@@ -81,6 +96,16 @@ export class VrchatApiClient {
       }
       if (signal.aborted) throw abortError();
       if (response.deferred) {
+        // Deferrals do not consume retry attempts, so bound the total wait:
+        // a long cooldown set by another tab must not park this request
+        // forever. Failing here lets callers fall back or report as usual.
+        if (!deferredSince) deferredSince = Date.now();
+        if (Date.now() - deferredSince >= CONFIG.API_DEFERRED_MAX_WAIT_MS) {
+          const error = new ApiError(0, 'VRChat API request deferred too long');
+          error.code = 'DEFERRED_TIMEOUT';
+          error.outcomeUnknown = method !== 'GET';
+          throw error;
+        }
         await waitUntil(Math.max(Date.now() + 25, response.retryAt), signal);
         continue;
       }
@@ -271,10 +296,19 @@ export class VrchatApiClient {
   async fetchCalendarEvents(kind, dateIso) {
     const base = kind ? `/calendar/${kind}` : '/calendar';
     const rows = [];
+    const seenIds = new Set();
     let offset = 0;
     for (let page = 0; page < 50; page += 1) {
       const data = await this.fetchJson(`${base}?date=${encodeURIComponent(dateIso)}&n=100&offset=${offset}`);
       const results = Array.isArray(data?.results) ? data.results : [];
+      // A server that ignores offset would otherwise page until the cap,
+      // returning the same events again and again. Treat an all-duplicate
+      // page as a failed list (fetchCalendarMonth degrades it to partial).
+      let fresh = 0;
+      for (const row of results) {
+        if (row && typeof row.id === 'string' && !seenIds.has(row.id)) { seenIds.add(row.id); fresh += 1; }
+      }
+      if (results.length && !fresh) throw new Error('Repeated calendar page');
       rows.push(...results);
       if (!data?.hasNext || !results.length) break;
       offset += results.length;
@@ -621,7 +655,7 @@ export class DataRepository {
     } catch (error) {
       if (error?.name === 'AbortError') throw error;
       if (error?.status === 401) throw error;
-      const record = this.friendCache.getStaleRecord();
+      const record = this.friendCache.getStaleRecord(CONFIG.PRIMARY_STALE_MAX_AGE_MS);
       const cached = record?.data;
       if (Array.isArray(cached)) {
         this.usedStaleFallback = true;
@@ -768,13 +802,17 @@ export class DataRepository {
     } catch (error) {
       if (error?.name === 'AbortError') throw error;
       if (error?.status === 401) throw error;
-      const record = this.favoriteCache.getStaleRecord();
+      const record = this.favoriteCache.getStaleRecord(CONFIG.PRIMARY_STALE_MAX_AGE_MS);
       const cached = record?.data;
       if (cached != null) {
         this.usedStaleFallback = true;
         if (Number.isFinite(record?.cachedAt)) this.primaryDataUpdatedAt = Math.max(this.primaryDataUpdatedAt, record.cachedAt);
+        return favoriteStateFromCachedData(cached);
       }
-      return favoriteStateFromCachedData(cached);
+      // With no same-account cache to fall back to, surface the failure like
+      // fetchFriends does. Returning an empty Favorite state here would
+      // silently present "nothing is favorited" as if it were live data.
+      throw error;
     }
   }
 
@@ -939,7 +977,7 @@ export class DataRepository {
       if (error?.name === 'AbortError') throw error;
       if (error?.status === 401) throw error;
       this.groupInstancesError = error;
-      const cached = this.groupInstancesCache.getStale();
+      const cached = this.groupInstancesCache.getStale(CONFIG.PRIMARY_STALE_MAX_AGE_MS);
       if (cached?.userId === userId && Array.isArray(cached.items)) {
         this.usedStaleFallback = true;
         return cached.items;
@@ -966,6 +1004,7 @@ export class DataRepository {
         name: data?.name || data?.displayName || '',
         shortCode: data?.shortCode || '',
         iconUrl: data?.iconUrl || '',
+        imageUrl: data?.imageUrl || data?.bannerUrl || '',
       };
       this.groupCache.set(groupId, normalized);
       return normalized;

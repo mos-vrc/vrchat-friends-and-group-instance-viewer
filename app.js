@@ -219,6 +219,7 @@ const {
   readUiPreferences,
   persistUiPreferences,
   restoreUiPreferences,
+  noteExternalUiPreferences,
   updateInstanceSizeButtons,
   applyInstanceSize,
   applyInstanceDisplay,
@@ -989,7 +990,9 @@ async function loadCalendarMonth({ ifNeeded = false } = {}) {
 }
 
 // Group names/icons for the day list and the detail popup. Fetched lazily
-// after the month renders; failures keep the generic fallback label.
+// after the month renders through the repository, so a group the instance
+// or notification passes already fetched (24h cache, single-flight) is
+// not requested again; failures keep the generic fallback label.
 async function prefetchCalendarGroups(view, current) {
   const ids = [...new Set(view.events.map((event) => event?.ownerId).filter((id) => typeof id === 'string' && id.startsWith('grp_')))];
   let changed = false;
@@ -998,7 +1001,7 @@ async function prefetchCalendarGroups(view, current) {
     if (view.groups.has(id) || view.groupPending.has(id)) continue;
     view.groupPending.add(id);
     try {
-      const group = await repository.api.fetchGroup(id);
+      const group = await repository.fetchGroup(id);
       if (!current()) return;
       if (group?.id) { view.groups.set(id, { name: group.name || '', iconUrl: group.iconUrl || '', imageUrl: group.imageUrl || group.bannerUrl || '' }); changed = true; }
     } catch { /* keep the fallback label */ } finally { view.groupPending.delete(id); }
@@ -1050,9 +1053,16 @@ function updateCalendarTodayDot() {
 // become real instead of being silently dropped.
 const STARRED_EVENTS_KEY = 'vrc_viewer_starred_events';
 
-function loadStarredEvents() {
-  const stored = uiStorage.get(STARRED_EVENTS_KEY, []);
-  calendarView.starredEvents = Array.isArray(stored)
+// The mirror mirrors one account's server-side follow state, so rows are
+// kept per account ({userId: rows}) under the same key. Until the
+// signed-in account is known the mirror stays empty and the toolbar
+// badge stays off; load() activates the current account's rows once the
+// user is known. A legacy plain-array value is adopted by the first
+// account that activates after the update and rewritten in the map form.
+let starredEventsAccountId = '';
+
+function sanitizeStarredRows(stored) {
+  return Array.isArray(stored)
     ? stored.filter((row) => row && typeof row.id === 'string'
       && typeof row.start === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.start)
       && typeof row.end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.end))
@@ -1060,8 +1070,32 @@ function loadStarredEvents() {
     : [];
 }
 
+function activateStarredEvents(accountId) {
+  if (!accountId || accountId === starredEventsAccountId) return;
+  starredEventsAccountId = accountId;
+  const stored = uiStorage.get(STARRED_EVENTS_KEY, null);
+  if (Array.isArray(stored)) {
+    calendarView.starredEvents = sanitizeStarredRows(stored);
+    persistStarredEvents();
+  } else {
+    const map = stored && typeof stored === 'object' ? stored : {};
+    calendarView.starredEvents = sanitizeStarredRows(map[accountId]);
+  }
+  updateCalendarStarMark();
+}
+
+function loadStarredEvents() {
+  // Rows load per account in activateStarredEvents() once load() knows
+  // the signed-in user; nothing account-specific is read before that.
+  calendarView.starredEvents = [];
+}
+
 function persistStarredEvents() {
-  uiStorage.set(STARRED_EVENTS_KEY, calendarView.starredEvents);
+  if (!starredEventsAccountId) return;
+  const stored = uiStorage.get(STARRED_EVENTS_KEY, null);
+  const map = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+  map[starredEventsAccountId] = calendarView.starredEvents;
+  uiStorage.set(STARRED_EVENTS_KEY, map);
 }
 
 function isStarredEvent(id) {
@@ -3079,17 +3113,22 @@ async function refreshGroupDataInBackground(userId, dataRepository, generation) 
     // user count with zero friends) until the next full reload. Re-read the
     // friends back-to-back with the group instances so the join below uses
     // two snapshots taken seconds apart. A failed re-read keeps the existing
-    // snapshot and continues; only a 401 aborts the pass.
-    try {
-      const friends = await dataRepository.fetchFriends();
-      if (!current()) return;
-      state.onlineFriends = normalizeFriends(friends);
-      rebuildDisplayedFriends();
-    } catch (error) {
-      if (!current() || error?.name === 'AbortError') return;
-      if (error?.status === 401) throw error;
-      diagnosticLog.record('friends', error);
-      console.warn('Could not refresh friends before group instances:', error);
+    // snapshot and continues; only a 401 aborts the pass. When hydration
+    // finished quickly the load() snapshot is still only seconds old and
+    // already meets that requirement, so the duplicate full re-read (one
+    // request per friends page) is skipped while it is that fresh.
+    if (Date.now() - (dataRepository.primaryDataUpdatedAt || 0) > CONFIG.FRIEND_CACHE_TTL_MS) {
+      try {
+        const friends = await dataRepository.fetchFriends();
+        if (!current()) return;
+        state.onlineFriends = normalizeFriends(friends);
+        rebuildDisplayedFriends();
+      } catch (error) {
+        if (!current() || error?.name === 'AbortError') return;
+        if (error?.status === 401) throw error;
+        diagnosticLog.record('friends', error);
+        console.warn('Could not refresh friends before group instances:', error);
+      }
     }
     const groupInstances = await dataRepository.fetchGroupInstances(userId);
     if (!current()) return;
@@ -3377,6 +3416,7 @@ async function load({ reason = 'initial', preserveToast = false } = {}) {
     const previousWorlds = worldFavorites;
     state.recent.token += 1; state.recent.loading = false; worldView.token++; worldView.loading=false;
     state.user = user;
+    activateStarredEvents(user.id);
     floatingMemo.sync();
     if(notifications?.account!==user.id){notifications?.dispose();notifications=new NotificationStore(dataRepository.api,user.id);}else {await notifications.inflight;if(!current())return;notifications.disposed=false;notifications.api=dataRepository.api;}
     if(notificationLocal.account!==user.id){notificationImageSaves.clear();notificationLocal.select(user.id);}
@@ -3837,6 +3877,7 @@ elements.clearCacheButton?.addEventListener('click', async () => {
   await load({ reason: 'cache', preserveToast: true });
 });
 window.addEventListener('storage', event => {
+  if(event.key&&event.key===CONFIG.UI_PREFERENCES_KEY){noteExternalUiPreferences();return;}
   if(event.key&&event.key===notificationLocal.memoKey){notificationLocal.reloadMemo();updateNotificationBadge();renderNotificationPanel();return;}
   if(event.key&&(event.key===notificationLocal.key||event.key===notificationLocal.key+':image-event')){notificationLocal.reload();updateNotificationBadge();renderNotificationPanel();return;}
   if (event.key !== 'vrc_viewer_cache_clear_event') return;

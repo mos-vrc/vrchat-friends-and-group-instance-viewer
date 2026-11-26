@@ -1,4 +1,5 @@
 import { CONFIG } from './config.js';
+import { allowedNotificationWrite } from './notifications.js';
 
 export function withTimeout(promise, milliseconds, onTimeout) {
   let timer;
@@ -19,6 +20,32 @@ export function isAllowedApiUrl(value) {
     return url.origin === 'https://vrchat.com' && !url.username && !url.password
       && url.pathname.startsWith('/api/1/');
   } catch { return false; }
+}
+
+// The single write allowlist for both transports (native-session.js in the
+// viewer document, background.js in the worker). A write is admitted only
+// for the exact routes, methods and body shapes below; notification writes
+// carry their own validation in notifications.js. GETs are reads and are
+// admitted by isAllowedApiUrl at the call sites instead.
+export function allowedWriteRequest(pathname, method, bodyText, hasSearch = false) {
+  if (method === 'GET') return true;
+  if (hasSearch) return false;
+  if (allowedNotificationWrite(pathname, method, bodyText)) return true;
+  if (method === 'POST') {
+    if (pathname === '/api/1/favorites' || /^\/api\/1\/invite\/myself\/to\/[^?#]+$/.test(pathname)) return true;
+    if (/^\/api\/1\/calendar\/grp_[A-Za-z0-9_-]+\/cal_[A-Za-z0-9_-]+\/follow$/.test(pathname)) {
+      let body; try { body = JSON.parse(bodyText); } catch { return false; }
+      return Boolean(body) && Object.keys(body).length === 1 && typeof body.isFollowing === 'boolean';
+    }
+    return false;
+  }
+  if (method === 'DELETE') return /^\/api\/1\/favorites\/fvrt_[A-Za-z0-9_-]+$/.test(pathname);
+  if (method !== 'PUT') return false;
+  let body; try { body = JSON.parse(bodyText); } catch { return false; }
+  return /^\/api\/1\/favorite\/group\/(?:friend\/group_[012]|world\/worlds(?:0|[1-9]\d*)|vrcPlusWorld\/vrcPlusWorlds[1-9]\d*|avatar\/avatars[1-9]\d*)\/usr_[A-Za-z0-9_-]+$/.test(pathname)
+    && Boolean(body) && Object.keys(body).length === 1 && typeof body.displayName === 'string'
+    && body.displayName.trim().length > 0 && body.displayName.trim().length <= CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH
+    && !/[\r\n\u0000]/.test(body.displayName);
 }
 
 export function retryAfterDeadline(value, now = Date.now(), fallbackMs = 1000) {
@@ -114,6 +141,20 @@ export class SharedRequestGate {
 }
 
 export function abortError() { return new DOMException('Request superseded', 'AbortError'); }
+
+// A signal that aborts when any of the given signals aborts.
+export function combineSignals(signals) {
+  const live = signals.filter((signal) => signal && typeof signal.addEventListener === 'function');
+  if (live.length <= 1) return live[0] || new AbortController().signal;
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any(live);
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  for (const signal of live) {
+    if (signal.aborted) { controller.abort(); break; }
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
+  return controller.signal;
+}
 
 export function waitUntil(deadline, signal) {
   return new Promise((resolve, reject) => {

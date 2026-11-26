@@ -1,6 +1,6 @@
 # VRChat Dashboard Addon
 
-**Version: 2.0.0.0**
+**Version: 2.0.0.1**
 
 VRChat Dashboard Addon（VRC DA）は、VRChatのフレンドの居場所、Friend / Groupインスタンス、Favoriteワールド、Favoriteアバター、通知をChromeで確認できる非公式拡張機能です。旧名称は「VRChat Friends & Group Instance Viewer」です。VRChat Inc.が制作・承認・提供するツールではありません。
 

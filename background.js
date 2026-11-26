@@ -1,15 +1,6 @@
-import { allowedNotificationWrite } from './notifications.js';
 import { buildApiHeaderRules } from './api-header-rules.js';
 import { CONFIG } from './config.js';
-import { isAllowedApiUrl, SharedRequestGate, withTimeout } from './request-policy.js';
-
-// Mirror of the calendar-follow branch in native-session.js allowedWrite:
-// the official "Add to Calendar" toggle, exact path + single boolean field.
-function allowedCalendarFollowWrite(pathname, text) {
-  if (!/^\/api\/1\/calendar\/grp_[A-Za-z0-9_-]+\/cal_[A-Za-z0-9_-]+\/follow$/.test(pathname)) return false;
-  let body; try { body = JSON.parse(text); } catch { return false; }
-  return Boolean(body) && Object.keys(body).length === 1 && typeof body.isFollowing === 'boolean';
-}
+import { allowedWriteRequest, isAllowedApiUrl, SharedRequestGate, withTimeout } from './request-policy.js';
 
 const requestGate = new SharedRequestGate();
 const pendingGets = new Map();
@@ -64,20 +55,7 @@ async function handleApiFetch(message, tabId) {
   if (!['GET', 'POST', 'DELETE', 'PUT'].includes(method)) return { ok: false, status: 400, text: '' };
   const requestUrl=new URL(message.url);
   // Keep exact write routes enforced even though declarative filters are broad.
-  if (method !== 'GET' && requestUrl.search) return { ok:false,status:400,text:'' };
-  const notificationWrite=allowedNotificationWrite(requestUrl.pathname,method,message.body);
-  if (!notificationWrite && method === 'POST' && requestUrl.pathname !== '/api/1/favorites'
-    && !/^\/api\/1\/invite\/myself\/to\/[^?#]+$/.test(requestUrl.pathname)
-    && !allowedCalendarFollowWrite(requestUrl.pathname, message.body)) return { ok:false,status:400,text:'' };
-  if (!notificationWrite && method === 'DELETE' && !/^\/api\/1\/favorites\/fvrt_[A-Za-z0-9_-]+$/.test(requestUrl.pathname)) return { ok:false,status:400,text:'' };
-  if (!notificationWrite && method === 'PUT') {
-    const url = new URL(message.url);
-    let body;
-    try { body = JSON.parse(message.body); } catch { return { ok: false, status: 400, text: '' }; }
-    if (url.search || !/^\/api\/1\/favorite\/group\/(?:friend\/group_[012]|world\/worlds(?:0|[1-9]\d*)|vrcPlusWorld\/vrcPlusWorlds[1-9]\d*|avatar\/avatars[1-9]\d*)\/usr_[A-Za-z0-9_-]+$/.test(url.pathname)
-      || !body || Object.keys(body).length !== 1 || typeof body.displayName !== 'string'
-      || !body.displayName.trim() || body.displayName.trim().length > CONFIG.FAVORITE_GROUP_NAME_MAX_LENGTH || /[\r\n\u0000]/.test(body.displayName)) return { ok: false, status: 400, text: '' };
-  }
+  if (!allowedWriteRequest(requestUrl.pathname, method, message.body, Boolean(requestUrl.search))) return { ok:false,status:400,text:'' };
   const key = method === 'GET' ? message.url : '';
   if (key && pendingGets.has(key)) {
     const entry = pendingGets.get(key);
